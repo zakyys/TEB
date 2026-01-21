@@ -85,7 +85,19 @@ const ScannerPreview = ({
           console.log("Scanner starting. Devices:", videoInputDevices);
           console.log("Selected device:", selectedDeviceId);
 
-          const controls = await codeReader.decodeFromVideoDevice(selectedDeviceId, videoRef.current, (result, error) => {
+          // Use high resolution constraints to allow scanning from further away
+          const constraints = {
+            video: {
+              deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
+              facingMode: selectedDeviceId ? undefined : "environment",
+              width: { min: 1280, ideal: 1920 },
+              height: { min: 720, ideal: 1080 },
+              // Try to force continuous focus
+              advanced: [{ focusMode: "continuous" }]
+            }
+          };
+
+          const controls = await codeReader.decodeFromConstraints(constraints, videoRef.current, (result, error) => {
             if (!active) return;
             if (result) {
               console.log("Barcode detected:", result.getText());
