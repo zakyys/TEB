@@ -941,10 +941,82 @@ const ProfilePage = () => {
           </CardContent>
         </Card>
 
+        {/* Refresh Aplikasi - Hard Reset Cache */}
+        <Card className="mb-4 border-orange-200 bg-orange-50/30">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg flex items-center gap-2 text-orange-700">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                <path d="M16 16h5v5" />
+              </svg>
+              Refresh Aplikasi
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between gap-4 mb-2">
+              <div className="flex-1">
+                <p className="text-sm text-muted-foreground">
+                  Update ke versi terbaru tanpa kehilangan data
+                </p>
+              </div>
+              <Button
+                onClick={async () => {
+                  const confirmed = window.confirm(
+                    "🔄 Refresh Aplikasi?\n\n" +
+                    "Ini akan:\n" +
+                    "✅ Menghapus cache aplikasi\n" +
+                    "✅ Memuat ulang dengan versi terbaru\n\n" +
+                    "Data Anda (produk, transaksi, dll) tetap AMAN.\n\n" +
+                    "Lanjutkan?"
+                  );
+
+                  if (!confirmed) return;
+
+                  try {
+                    // 1. Unregister all service workers
+                    if ('serviceWorker' in navigator) {
+                      const registrations = await navigator.serviceWorker.getRegistrations();
+                      for (const registration of registrations) {
+                        await registration.unregister();
+                        console.log('[Refresh] Service Worker unregistered');
+                      }
+                    }
+
+                    // 2. Clear all caches
+                    if ('caches' in window) {
+                      const cacheNames = await caches.keys();
+                      for (const cacheName of cacheNames) {
+                        await caches.delete(cacheName);
+                        console.log('[Refresh] Cache deleted:', cacheName);
+                      }
+                    }
+
+                    // 3. Force reload from server (bypass cache)
+                    alert("✅ Cache berhasil dihapus!\n\nAplikasi akan dimuat ulang...");
+                    window.location.reload();
+
+                  } catch (error) {
+                    console.error('[Refresh] Error:', error);
+                    alert("Gagal refresh. Coba refresh manual dengan Ctrl+Shift+R");
+                  }
+                }}
+                className="bg-orange-500 hover:bg-orange-600"
+              >
+                🔄 Refresh
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              💡 Gunakan ini jika aplikasi tidak update atau ada bug setelah update.
+            </p>
+          </CardContent>
+        </Card>
+
         {/* Version Info */}
         <div className="mt-8 mb-4 text-center">
           <p className="text-xs text-muted-foreground font-medium opacity-50">
-            APLIKASI TOKO BAUT - V3.0
+            APLIKASI TOKO BAUT - V4.0
           </p>
         </div>
       </div>
