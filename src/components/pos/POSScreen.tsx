@@ -446,41 +446,12 @@ const POSScreen = () => {
   // Function to generate HTML receipt content for image capture
 
 
-  // Handle barcode result: Auto-add to cart if found, otherwise show in search
+  // Handle barcode result: Just set search term
   const handleBarcodeDetected = useCallback((code: string) => {
-    // Clean the code
-    const cleanCode = code.trim();
-    if (!cleanCode) return;
-
-    // Direct match check (Product SKU or Name)
-    const foundProduct = products.find(p =>
-      normalizeSearch(p.sku || "") === normalizeSearch(cleanCode) ||
-      normalizeSearch(p.name || "") === normalizeSearch(cleanCode) ||
-      (p.sku && p.sku.endsWith(cleanCode)) // Loose match for suffixes
-    );
-
-    if (foundProduct) {
-      // If found, ADD TO CART directly and notify user
-      addToCartStore(foundProduct);
-      toast({
-        title: "Produk Ditambahkan",
-        description: `${foundProduct.name} (+1)`,
-        duration: 1500,
-      });
-      // Do NOT interrupt the search term / current typing
-    } else {
-      // If NOT found, populate search bar so user can see what was scanned
-      setSearchTerm(cleanCode);
-      setActiveTab('all');
-      setCurrentPage(1);
-      toast({
-        variant: "destructive",
-        title: "Produk Tidak Ditemukan",
-        description: `Kode: ${cleanCode}`,
-        duration: 2000,
-      });
-    }
-  }, [products, addToCartStore, toast]);
+    setSearchTerm(code);
+    setActiveTab('all');
+    setCurrentPage(1);
+  }, []);
 
 
   return (
