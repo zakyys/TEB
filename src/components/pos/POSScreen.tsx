@@ -457,6 +457,8 @@ const POSScreen = () => {
     setSearchTerm(code);
     setActiveTab('all');
     setCurrentPage(1);
+    // Clear dismissed products so newly scanned product can appear
+    setDismissedIds([]);
   }, []);
 
 
@@ -662,7 +664,7 @@ const POSScreen = () => {
                       }}
                       initial={{ opacity: 1, x: 0 }}
                       animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: info => info > 0 ? 300 : -300 }}
+                      exit={{ opacity: 0, x: 300 }}
                       whileDrag={{ scale: 0.95, opacity: 0.8 }}
                       className="touch-pan-y"
                     >
