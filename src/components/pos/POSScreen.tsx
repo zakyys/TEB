@@ -102,8 +102,9 @@ const ScannerPreview = ({
             if (result) {
               console.log("Barcode detected:", result.getText());
               onDetected(result.getText());
-              if (controlsRef.current) controlsRef.current.stop();
-              onClose();
+              // Do NOT stop or close - CONTINUOUS SCANNING
+              // if (controlsRef.current) controlsRef.current.stop();
+              // onClose();
             }
           });
           controlsRef.current = controls;
@@ -161,14 +162,7 @@ const ScannerPreview = ({
           <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
           SCANNING BARCODE...
         </span>
-        <Button
-          size="icon"
-          variant="destructive"
-          className="h-8 w-8 rounded-full shadow-lg"
-          onClick={onClose}
-        >
-          <X className="h-4 w-4" />
-        </Button>
+        {/* Close button removed as requested */}
       </div>
 
       <div className="absolute bottom-2 left-0 right-0 text-center pointer-events-none px-4">
@@ -472,7 +466,7 @@ const POSScreen = () => {
             <ScannerPreview
               onDetected={(code) => {
                 handleBarcodeDetected(code);
-                setIsScanning(false);
+                // setIsScanning(false); // REMOVED: Keep scanner open
               }}
               onClose={() => setIsScanning(false)}
             />
