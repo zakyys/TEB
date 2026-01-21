@@ -76,8 +76,8 @@ const ScannerPreview = ({
             BarcodeFormat.CODE_39
           ]);
 
-          // Scan interval 300ms - balance between speed and CPU
-          const codeReader = new BrowserMultiFormatReader(hints, 300);
+          // Scan interval 400ms - balanced performance
+          const codeReader = new BrowserMultiFormatReader(hints, 400);
           codeReaderRef.current = codeReader;
 
           const videoInputDevices = await BrowserMultiFormatReader.listVideoInputDevices();
@@ -86,13 +86,13 @@ const ScannerPreview = ({
           console.log("Scanner starting. Devices:", videoInputDevices);
           console.log("Selected device:", selectedDeviceId);
 
-          // Use FULL HD resolution (1920x1080) for better distance detection
+          // Use HD resolution (1280x720) - balanced for performance + TRY_HARDER
           const constraints = {
             video: {
               deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
               facingMode: selectedDeviceId ? undefined : "environment",
-              width: { ideal: 1920 },
-              height: { ideal: 1080 }
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
             }
           };
 
