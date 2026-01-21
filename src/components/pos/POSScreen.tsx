@@ -68,15 +68,15 @@ const ScannerPreview = ({
       if (videoRef.current) {
         try {
           const hints = new Map();
-          // TRY_HARDER helps with accuracy. Since we only check ONE format now, it will still be fast.
-          hints.set(DecodeHintType.TRY_HARDER, true);
+          // Disable TRY_HARDER to reduce lag
+          // hints.set(DecodeHintType.TRY_HARDER, true);
           // Optimize: Only search for Code 39 as requested by user
           hints.set(DecodeHintType.POSSIBLE_FORMATS, [
             BarcodeFormat.CODE_39
           ]);
 
-          // timeBetweenScansMillis = 200ms
-          const codeReader = new BrowserMultiFormatReader(hints, 200);
+          // Increase scan interval to reduce CPU load (500ms)
+          const codeReader = new BrowserMultiFormatReader(hints, 500);
           codeReaderRef.current = codeReader;
 
           const videoInputDevices = await BrowserMultiFormatReader.listVideoInputDevices();
@@ -85,15 +85,13 @@ const ScannerPreview = ({
           console.log("Scanner starting. Devices:", videoInputDevices);
           console.log("Selected device:", selectedDeviceId);
 
-          // Use high resolution constraints to allow scanning from further away
+          // Use moderate resolution (HD 720p) for better performance
           const constraints = {
             video: {
               deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
               facingMode: selectedDeviceId ? undefined : "environment",
-              width: { min: 1280, ideal: 1920 },
-              height: { min: 720, ideal: 1080 },
-              // Try to force continuous focus
-              advanced: [{ focusMode: "continuous" }]
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
             }
           };
 
@@ -448,11 +446,41 @@ const POSScreen = () => {
   // Function to generate HTML receipt content for image capture
 
 
+  // Handle barcode result: Auto-add to cart if found, otherwise show in search
   const handleBarcodeDetected = useCallback((code: string) => {
-    setSearchTerm(code);
-    setActiveTab('all');
-    setCurrentPage(1);
-  }, []);
+    // Clean the code
+    const cleanCode = code.trim();
+    if (!cleanCode) return;
+
+    // Direct match check (Product SKU or Name)
+    const foundProduct = products.find(p =>
+      normalizeSearch(p.sku || "") === normalizeSearch(cleanCode) ||
+      normalizeSearch(p.name || "") === normalizeSearch(cleanCode) ||
+      (p.sku && p.sku.endsWith(cleanCode)) // Loose match for suffixes
+    );
+
+    if (foundProduct) {
+      // If found, ADD TO CART directly and notify user
+      addToCartStore(foundProduct);
+      toast({
+        title: "Produk Ditambahkan",
+        description: `${foundProduct.name} (+1)`,
+        duration: 1500,
+      });
+      // Do NOT interrupt the search term / current typing
+    } else {
+      // If NOT found, populate search bar so user can see what was scanned
+      setSearchTerm(cleanCode);
+      setActiveTab('all');
+      setCurrentPage(1);
+      toast({
+        variant: "destructive",
+        title: "Produk Tidak Ditemukan",
+        description: `Kode: ${cleanCode}`,
+        duration: 2000,
+      });
+    }
+  }, [products, addToCartStore, toast]);
 
 
   return (

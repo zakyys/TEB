@@ -216,7 +216,7 @@ export async function backupAllDataToFile(): Promise<void> {
     const backupData = {
       type: "full-backup",
       timestamp: new Date().toISOString(),
-      version: "2.1", // Upgraded version with notes
+      version: "2.2", // Upgraded version with Multi-Toko connection
       data: {
         products: getFromLS(LS_KEYS.PRODUCTS, []),
         transactions: allTransactions, // From IndexedDB
@@ -229,6 +229,12 @@ export async function backupAllDataToFile(): Promise<void> {
         notes: getFromLS('bengkel_notes', []), // Catatan/Notes
         cart: getFromLS(LS_KEYS.CART, []), // Current cart
         enablePPN: getFromLS(LS_KEYS.ENABLE_PPN, false), // PPN setting
+        // Multi-Toko Connection Settings (version 2.2+)
+        multiTokoConnection: {
+          gasUrl: getFromLS(LS_KEYS.GAS_URL, ""),
+          telegramBotToken: getFromLS(LS_KEYS.TELEGRAM_BOT_TOKEN, ""),
+          telegramChatId: getFromLS(LS_KEYS.TELEGRAM_CHAT_ID, ""),
+        },
       },
     };
 
@@ -331,6 +337,20 @@ export function restoreFromFile(file: File): Promise<void> {
           // Restore PPN setting (version 2.0+)
           if (backupData.data.enablePPN !== undefined) {
             saveToLS(LS_KEYS.ENABLE_PPN, backupData.data.enablePPN);
+          }
+
+          // Restore Multi-Toko Connection Settings (version 2.2+)
+          if (backupData.data.multiTokoConnection) {
+            const conn = backupData.data.multiTokoConnection;
+            if (conn.gasUrl) {
+              saveToLS(LS_KEYS.GAS_URL, conn.gasUrl);
+            }
+            if (conn.telegramBotToken) {
+              saveToLS(LS_KEYS.TELEGRAM_BOT_TOKEN, conn.telegramBotToken);
+            }
+            if (conn.telegramChatId) {
+              saveToLS(LS_KEYS.TELEGRAM_CHAT_ID, conn.telegramChatId);
+            }
           }
         } else if (backupData.type === "today-data") {
           // Handle today-data backup (import only, won't overwrite)
