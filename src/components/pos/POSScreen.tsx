@@ -47,6 +47,7 @@ import { completeTransactionUtil, generateTextReceipt, generateReceiptHtml } fro
 import type { Product, CartItem, ProfileData } from '@/types/pos'
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
 
 // Types moved to '@/types/pos'
 
@@ -218,6 +219,7 @@ const POSScreen = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState("all");
   const [isScanning, setIsScanning] = useState(false);
+  const [dismissedIds, setDismissedIds] = useState<string[]>([]); // Track swiped/dismissed products
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<string>("cash");
   const [amountPaid, setAmountPaid] = useState<string>("");
@@ -303,7 +305,11 @@ const POSScreen = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
   const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
-  const paginatedItems = filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  // Filter out dismissed products during scan session
+  const displayItems = isScanning
+    ? filteredItems.filter(item => !dismissedIds.includes(item.id))
+    : filteredItems;
+  const paginatedItems = displayItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   // Reset ke halaman 1 jika filter berubah
   useEffect(() => {
@@ -500,6 +506,7 @@ const POSScreen = () => {
                   return;
                 }
                 setSearchTerm("");
+                setDismissedIds([]); // Reset dismissed items when closing scanner
                 setIsScanning(!isScanning);
               }}
               variant="outline"
@@ -521,7 +528,8 @@ const POSScreen = () => {
                 const inCart = cart.find(ci => ci.id === item.id);
                 const qty = inCart?.quantity || 0;
                 const maxed = item.type === 'product' && item.stock !== undefined && qty >= (item.stock || 0);
-                return (
+
+                const cardContent = (
                   <Card
                     key={item.id}
                     className="hover:border-primary transition-colors"
@@ -639,6 +647,31 @@ const POSScreen = () => {
                     </CardContent>
                   </Card>
                 );
+
+                // If scanning, wrap with swipe-to-dismiss gesture
+                if (isScanning) {
+                  return (
+                    <motion.div
+                      key={item.id}
+                      drag="x"
+                      dragConstraints={{ left: 0, right: 0 }}
+                      onDragEnd={(e, info) => {
+                        if (Math.abs(info.offset.x) > 100) {
+                          setDismissedIds(prev => [...prev, item.id]);
+                        }
+                      }}
+                      initial={{ opacity: 1, x: 0 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: info => info > 0 ? 300 : -300 }}
+                      whileDrag={{ scale: 0.95, opacity: 0.8 }}
+                      className="touch-pan-y"
+                    >
+                      {cardContent}
+                    </motion.div>
+                  );
+                }
+
+                return cardContent;
               })}
             </div>
           </ScrollArea>
