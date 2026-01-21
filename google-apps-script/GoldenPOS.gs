@@ -163,6 +163,61 @@ function sendTelegramNotification(data) {
     }
 }
 
+// Fitur: Simpan Full Backup ke Google Drive
+function saveBackupToDrive(backupData) {
+    try {
+        var FOLDER_NAME = "Backup POS";
+        
+        // Get or create folder
+        var folders = DriveApp.getFoldersByName(FOLDER_NAME);
+        var folder;
+        if (folders.hasNext()) {
+            folder = folders.next();
+        } else {
+            folder = DriveApp.createFolder(FOLDER_NAME);
+            Logger.log("Created folder: " + FOLDER_NAME);
+        }
+        
+        // Generate filename: backupfull_21-01-2026_Jam_15_30.json
+        var now = new Date();
+        var day = String(now.getDate()).padStart(2, '0');
+        var month = String(now.getMonth() + 1).padStart(2, '0');
+        var year = now.getFullYear();
+        var hours = String(now.getHours()).padStart(2, '0');
+        var minutes = String(now.getMinutes()).padStart(2, '0');
+        
+        var fileName = "backupfull_" + day + "-" + month + "-" + year + "_Jam_" + hours + "_" + minutes + ".json";
+        
+        // Create file content
+        var jsonContent = JSON.stringify(backupData, null, 2);
+        var blob = Utilities.newBlob(jsonContent, "application/json", fileName);
+        
+        // Save to folder
+        var file = folder.createFile(blob);
+        
+        // Set sharing permission: Anyone with link can view
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        
+        // Get shareable link
+        var fileUrl = file.getUrl();
+        
+        Logger.log("Backup saved: " + fileName + " -> " + fileUrl);
+        
+        return {
+            success: true,
+            fileName: fileName,
+            fileUrl: fileUrl
+        };
+        
+    } catch (error) {
+        Logger.log("Drive Backup Error: " + error.toString());
+        return {
+            success: false,
+            error: error.toString()
+        };
+    }
+}
+
 // Reset/Clear Sheets completely
 function resetSheets(data) {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -747,29 +802,14 @@ function saveSalesData(data) {
     var currentRow = startRow;
 
     // ═══════════════════════════════════════════════════════
-    // SECTION: Header Tanggal
+    // SECTION: Header Tanggal (1 baris saja)
     // ═══════════════════════════════════════════════════════
-    sheet.getRange(currentRow, 1, 1, 8).merge()
-        .setValue("═══════════════════════════════════════════════════════════════════════════════")
-        .setBackground("#E0E0E0")
-        .setFontColor("#666666");
-    currentRow++;
-
     sheet.getRange(currentRow, 1, 1, 8).merge()
         .setValue("📅 " + today)
         .setFontWeight("bold")
         .setFontSize(14)
         .setBackground("#4285F4")
         .setFontColor("#FFFFFF")
-        .setHorizontalAlignment("center");
-    currentRow++;
-
-    // Sub-header (Last Update)
-    var timestamp = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
-    sheet.getRange(currentRow, 1, 1, 8).merge()
-        .setValue("Terakhir Update: " + timestamp)
-        .setFontStyle("italic")
-        .setFontColor("#666666")
         .setHorizontalAlignment("center");
     currentRow++;
 
@@ -1132,11 +1172,50 @@ function saveSalesData(data) {
         currentRow++;
     }
 
+    // ═══════════════════════════════════════════════════════
+    // SECTION: Full Backup to Google Drive
+    // ═══════════════════════════════════════════════════════
+    var backupResult = null;
+    if (data.fullBackup) {
+        backupResult = saveBackupToDrive(data.fullBackup);
+        
+        if (backupResult && backupResult.success) {
+            // Add backup link section to sheet
+            sheet.getRange(currentRow, 1, 1, 8).merge()
+                .setValue("📁 FULL BACKUP")
+                .setFontWeight("bold")
+                .setFontSize(11)
+                .setBackground("#E3F2FD")
+                .setFontColor("#1565C0");
+            currentRow++;
+            
+            sheet.getRange(currentRow, 1, 1, 8).merge()
+                .setValue("📄 " + backupResult.fileName)
+                .setFontColor("#424242");
+            currentRow++;
+            
+            sheet.getRange(currentRow, 1, 1, 8).merge()
+                .setValue("🔗 " + backupResult.fileUrl)
+                .setFontColor("#1976D2")
+                .setFontStyle("italic");
+            currentRow++;
+            
+            // Spacer
+            sheet.getRange(currentRow, 1).setValue("");
+            currentRow++;
+        }
+    }
+
     // Footer
     sheet.getRange(currentRow, 1, 1, 8).merge()
         .setValue("═══════════════════════════════════════════════════════════════════════════════")
         .setBackground("#E0E0E0")
         .setFontColor("#666666");
 
-    return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
+    // Return response with backup info
+    var response = { success: true };
+    if (backupResult) {
+        response.backup = backupResult;
+    }
+    return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
 }

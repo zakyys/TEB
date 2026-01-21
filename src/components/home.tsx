@@ -644,10 +644,27 @@ const Dashboard = () => {
             hargaBaru: e.newItem?.price || 0
           };
         }),
-        sendNotification: true // Tell Google Script to send Telegram message
+        sendNotification: true, // Tell Google Script to send Telegram message
+        telegramBotToken: currentConfig.telegramBotToken,
+        telegramChatId: currentConfig.telegramChatId,
+        // Full Backup for Google Drive
+        fullBackup: {
+          exportDate: new Date().toISOString(),
+          version: "4.0",
+          products: getFromLS<any[]>('bengkel_products', []),
+          transactions: transactions,
+          visitors: {
+            log: getFromLS<any[]>('bengkel_visitors_log', []),
+            lostLog: getFromLS<any[]>('bengkel_visitor_lost', [])
+          },
+          exchanges: allExchanges,
+          refunds: allRefunds,
+          notes: getNotes(),
+          profile: getFromLS<any>('bengkel_profile', {}),
+        }
       };
 
-      console.log("[GAS] Sending daily payload to:", currentConfig.gasUrl);
+      console.log("[GAS] Sending daily payload with fullBackup to:", currentConfig.gasUrl);
       await fetch(currentConfig.gasUrl, {
         method: "POST",
         mode: "no-cors",
