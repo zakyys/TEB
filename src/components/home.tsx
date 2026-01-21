@@ -574,8 +574,9 @@ const Dashboard = () => {
         items: itemsToSend.map(item => ({
           kode: item.sku,
           quantity: item.quantity,
-          price: item.price,
-          total: item.total
+          price: item.price, // Angka biasa untuk kolom Harga (10000)
+          total: item.total, // Raw number for calculations
+          totalFormatted: item.total.toLocaleString('id-ID') // Format dengan pemisah ribuan untuk kolom Total (10.000)
         })),
         refunds: refundsToday.map(r => {
           let pDate = r.originalPurchaseDate;
@@ -663,10 +664,15 @@ const Dashboard = () => {
         return tDate >= startOfMonth && t.status !== "refunded" && t.status !== "cancelled";
       });
 
-      const itemMap: Record<string, { sku: string; name: string; quantity: number; total: number }> = {};
+      const itemMap: Record<string, { sku: string; name: string; quantity: number; total: number; transactionCount: number }> = {};
       monthlyTransactions.forEach(t => {
+        // Track which items appeared in this transaction (to count unique transactions per item)
+        const itemsInThisTransaction = new Set<string>();
+
         t.items.forEach(item => {
           const key = item.sku || item.name;
+          itemsInThisTransaction.add(key);
+
           if (itemMap[key]) {
             itemMap[key].quantity += item.quantity;
             itemMap[key].total += item.quantity * item.price;
@@ -676,7 +682,15 @@ const Dashboard = () => {
               name: item.name,
               quantity: item.quantity,
               total: item.quantity * item.price,
+              transactionCount: 0,
             };
+          }
+        });
+
+        // Increment transaction count for each unique item in this transaction
+        itemsInThisTransaction.forEach(key => {
+          if (itemMap[key]) {
+            itemMap[key].transactionCount += 1;
           }
         });
       });
@@ -764,6 +778,7 @@ const Dashboard = () => {
             kode: item.sku,
             nama: item.name,
             quantity: item.quantity,
+            transactionCount: item.transactionCount,
             totalSales: item.total
           })),
           dailyVisitors: dailyVisitors,
@@ -782,6 +797,13 @@ const Dashboard = () => {
           telegramBotToken: currentConfig.telegramBotToken,
           telegramChatId: currentConfig.telegramChatId,
         };
+
+        // DEBUG: Log to see transactionCount values
+        console.log("[DEBUG] Monthly Items with transactionCount:", monthlyPayload.items.slice(0, 5).map(i => ({
+          kode: i.kode,
+          qty: i.quantity,
+          trxCount: i.transactionCount
+        })));
 
         await fetch(currentConfig.gasUrl, {
           method: "POST",
@@ -832,8 +854,8 @@ const Dashboard = () => {
           'No': idx + 1,
           'Kode': item.sku,
           'Qty': item.quantity,
-          'Harga': item.price,
-          'Total': item.total
+          'Harga': item.price, // Angka biasa tanpa pemisah ribuan (10000)
+          'Total': item.total.toLocaleString('id-ID') // Format dengan pemisah ribuan (10.000)
         }));
 
         // Add total row
@@ -842,7 +864,7 @@ const Dashboard = () => {
           'Kode': '',
           'Qty': '',
           'Harga': 'TOTAL:',
-          'Total': totalPenjualan
+          'Total': totalPenjualan.toLocaleString('id-ID') // Format dengan pemisah ribuan (10.000)
         });
 
         const ws1 = XLSX.utils.json_to_sheet(dailySalesData);
