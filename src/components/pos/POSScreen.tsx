@@ -68,20 +68,14 @@ const ScannerPreview = ({
       if (videoRef.current) {
         try {
           const hints = new Map();
-          // Re-enabling TRY_HARDER for better detection
+          // TRY_HARDER helps with accuracy. Since we only check ONE format now, it will still be fast.
           hints.set(DecodeHintType.TRY_HARDER, true);
+          // Optimize: Only search for Code 39 as requested by user
           hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-            BarcodeFormat.QR_CODE,
-            BarcodeFormat.CODE_128,
-            BarcodeFormat.EAN_13,
-            BarcodeFormat.EAN_8,
-            BarcodeFormat.CODE_39,
-            BarcodeFormat.UPC_A,
-            BarcodeFormat.UPC_E,
-            BarcodeFormat.ITF
+            BarcodeFormat.CODE_39
           ]);
 
-          // Keep 200ms for responsiveness
+          // timeBetweenScansMillis = 200ms
           const codeReader = new BrowserMultiFormatReader(hints, 200);
           codeReaderRef.current = codeReader;
 
