@@ -69,15 +69,15 @@ const ScannerPreview = ({
       if (videoRef.current) {
         try {
           const hints = new Map();
-          // Disable TRY_HARDER to reduce lag
-          // hints.set(DecodeHintType.TRY_HARDER, true);
+          // Enable TRY_HARDER for better detection from distance
+          hints.set(DecodeHintType.TRY_HARDER, true);
           // Optimize: Only search for Code 39 as requested by user
           hints.set(DecodeHintType.POSSIBLE_FORMATS, [
             BarcodeFormat.CODE_39
           ]);
 
-          // Increase scan interval to reduce CPU load (500ms)
-          const codeReader = new BrowserMultiFormatReader(hints, 500);
+          // Scan interval 300ms - balance between speed and CPU
+          const codeReader = new BrowserMultiFormatReader(hints, 300);
           codeReaderRef.current = codeReader;
 
           const videoInputDevices = await BrowserMultiFormatReader.listVideoInputDevices();
@@ -86,13 +86,13 @@ const ScannerPreview = ({
           console.log("Scanner starting. Devices:", videoInputDevices);
           console.log("Selected device:", selectedDeviceId);
 
-          // Use moderate resolution (HD 720p) for better performance
+          // Use FULL HD resolution (1920x1080) for better distance detection
           const constraints = {
             video: {
               deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
               facingMode: selectedDeviceId ? undefined : "environment",
-              width: { ideal: 1280 },
-              height: { ideal: 720 }
+              width: { ideal: 1920 },
+              height: { ideal: 1080 }
             }
           };
 
