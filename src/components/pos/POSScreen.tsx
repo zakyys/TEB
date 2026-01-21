@@ -68,8 +68,8 @@ const ScannerPreview = ({
       if (videoRef.current) {
         try {
           const hints = new Map();
-          // TRY_HARDER can be slow on mobile, disabling for speed
-          // hints.set(DecodeHintType.TRY_HARDER, true);
+          // Re-enabling TRY_HARDER for better detection
+          hints.set(DecodeHintType.TRY_HARDER, true);
           hints.set(DecodeHintType.POSSIBLE_FORMATS, [
             BarcodeFormat.QR_CODE,
             BarcodeFormat.CODE_128,
@@ -81,7 +81,7 @@ const ScannerPreview = ({
             BarcodeFormat.ITF
           ]);
 
-          // timeBetweenScansMillis = 200ms (more responsive)
+          // Keep 200ms for responsiveness
           const codeReader = new BrowserMultiFormatReader(hints, 200);
           codeReaderRef.current = codeReader;
 
