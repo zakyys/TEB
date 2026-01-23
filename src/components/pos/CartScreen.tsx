@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Minus, Plus, ShoppingCart, Trash2 } from "lucide-react";
+import { Minus, Plus, ShoppingCart, Trash2, CreditCard } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CheckCircle, Download, Check } from "lucide-react";
@@ -11,6 +11,8 @@ import { usePosStore } from "@/store/usePosStore";
 import type { Product, CartItem } from '@/types/pos'
 import { completeTransactionUtil, generateTextReceipt } from "@/lib/transactions";
 import { useToast } from "@/components/ui/use-toast";
+import { addNote } from "@/lib/notes";
+import { Input } from "@/components/ui/input";
 
 const CartScreen = () => {
   const navigate = useNavigate();
@@ -29,6 +31,15 @@ const CartScreen = () => {
   const [isUangPasSelected, setIsUangPasSelected] = useState(false);
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
   const [lastTransactionTotal, setLastTransactionTotal] = useState(0);
+
+  // Discount states
+  const [discountPercent, setDiscountPercent] = useState<string>("");
+  const [discountAmount, setDiscountAmount] = useState<number>(0);
+
+  // Hutang (Debt) states
+  const [isHutangMode, setIsHutangMode] = useState(false);
+  const [showHutangDialog, setShowHutangDialog] = useState(false);
+  const [hutangCustomerName, setHutangCustomerName] = useState("");
 
   // FIX QTY INPUT: State untuk menyimpan nilai string sementara saat user mengetik
   const [editingQuantities, setEditingQuantities] = useState<Record<string, string>>({});
@@ -52,7 +63,17 @@ const CartScreen = () => {
 
   // Total sama dengan subtotal (tanpa PPN)
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const total = subtotal;
+
+  // Kalkulasi diskon
+  const parsedDiscount = parseFloat(discountPercent) || 0;
+  const calculatedDiscount = Math.round((subtotal * parsedDiscount) / 100);
+  const total = subtotal - calculatedDiscount;
+
+  // Update discountAmount ketika subtotal atau discountPercent berubah
+  React.useEffect(() => {
+    setDiscountAmount(calculatedDiscount);
+  }, [calculatedDiscount]);
+
   const change = amountPaid ? parseFloat(amountPaid) - total : 0;
 
   const updateQuantity = (id: string, newQuantity: number) => {
@@ -106,6 +127,8 @@ const CartScreen = () => {
       subtotal,
       tax: 0,
       total,
+      discountPercent: parseFloat(discountPercent) || 0,
+      discountAmount,
     });
 
     // Perbarui produk di UI (CartScreen tidak pegang state products, jadi cukup persist)
@@ -149,6 +172,67 @@ const CartScreen = () => {
     }
     setPaymentError("");
     await completeTransaction();
+  };
+
+  // Confirm Hutang - simpan sebagai note hutang dan proses transaksi
+  const confirmHutang = async () => {
+    if (!hutangCustomerName.trim()) {
+      setPaymentError("Masukkan nama pelanggan!");
+      return;
+    }
+
+    // Buat deskripsi item yang dibeli
+    const itemsList = cart.map(item => `${item.name} (${item.quantity}x)`).join(", ");
+
+    // Simpan sebagai note hutang
+    addNote({
+      date: new Date().toISOString(),
+      content: `Hutang: ${itemsList}`,
+      type: 'hutang',
+      customerName: hutangCustomerName.trim(),
+      amount: total,
+      priority: 'penting'
+    });
+
+    // Proses transaksi seperti biasa (dengan payment method "hutang")
+    const products = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
+    const { transaction, updatedProducts } = await completeTransactionUtil({
+      cart,
+      products,
+      paymentMethod: "hutang",
+      amountPaid: 0,
+      subtotal,
+      tax: 0,
+      total,
+      discountPercent: parseFloat(discountPercent) || 0,
+      discountAmount,
+    });
+
+    // Perbarui produk di UI
+    saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+
+    // Simpan total untuk popup
+    setLastTransactionTotal(total);
+
+    // Reset states
+    clearCart();
+    setPaymentMethod("cash");
+    setAmountPaid("");
+    setShowPaymentForm(false);
+    setPaymentError("");
+    setIsUangPasSelected(false);
+    setIsHutangMode(false);
+    setShowHutangDialog(false);
+    setHutangCustomerName("");
+
+    // Toast notifikasi
+    toast({
+      title: "Hutang Tercatat!",
+      description: `${hutangCustomerName} - ${formatCurrency(total)}`,
+    });
+
+    // Tampilkan popup sukses
+    setShowSuccessPopup(true);
   };
 
   // Filter cart jika barcodeFilter aktif
@@ -258,6 +342,70 @@ const CartScreen = () => {
             )}
           </div>
         )}
+
+        {/* Discount Section */}
+        {cart.length > 0 && (
+          <div className="mt-4 p-4 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-xl border border-purple-200">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">🏷️</span>
+                <span className="text-sm font-semibold text-purple-700">Diskon</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center bg-white rounded-lg border border-purple-300 overflow-hidden">
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.5"
+                    value={discountPercent}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      // Max 100%
+                      if (parseFloat(val) > 100) {
+                        setDiscountPercent("100");
+                      } else {
+                        setDiscountPercent(val);
+                      }
+                    }}
+                    placeholder="0"
+                    className="w-16 px-2 py-2 text-center text-sm font-semibold focus:outline-none"
+                  />
+                  <span className="px-2 py-2 bg-purple-100 text-purple-700 font-bold text-sm">%</span>
+                </div>
+                {discountAmount > 0 && (
+                  <span className="px-3 py-1.5 bg-red-100 text-red-600 rounded-lg text-sm font-bold">
+                    - {formatCurrency(discountAmount)}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Quick discount buttons */}
+            <div className="flex gap-2 mt-3">
+              {[3, 5, 7, 10].map((percent) => (
+                <button
+                  key={percent}
+                  onClick={() => setDiscountPercent(String(percent))}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg border transition-all ${discountPercent === String(percent)
+                    ? 'bg-purple-600 text-white border-purple-600'
+                    : 'bg-white text-purple-600 border-purple-300 hover:bg-purple-50'
+                    }`}
+                >
+                  {percent}%
+                </button>
+              ))}
+              {discountPercent && (
+                <button
+                  onClick={() => setDiscountPercent("")}
+                  className="px-3 py-1.5 text-xs font-bold rounded-lg bg-gray-200 text-gray-600 hover:bg-gray-300 transition-all"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
 
@@ -265,30 +413,60 @@ const CartScreen = () => {
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg z-30 pb-20">
         {isCartLoaded && cart.length > 0 && (
           <div className="p-3 space-y-2">
-            {/* Baris 1: Uang Pas + Total */}
+            {/* Baris 1: Uang Pas + Hutang + Total */}
             <div className="flex items-center justify-between gap-2">
-              <Button
-                type="button"
-                variant={isUangPasSelected ? "default" : "outline"}
-                className={`h-10 px-4 font-semibold ${isUangPasSelected ? "bg-green-600 hover:bg-green-700 text-white" : ""}`}
-                onClick={() => {
-                  if (isUangPasSelected) {
-                    // Unselect
-                    setIsUangPasSelected(false);
-                    setAmountPaid("");
-                  } else {
-                    // Select
-                    setIsUangPasSelected(true);
-                    setAmountPaid(String(Math.ceil(total)));
-                  }
-                  setPaymentError("");
-                }}
-              >
-                {isUangPasSelected ? "✓ Uang Pas" : "💵 Uang Pas"}
-              </Button>
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-500">Total:</span>
-                <span className="text-xl font-bold text-amber-600">{formatCurrency(total)}</span>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant={isUangPasSelected ? "default" : "outline"}
+                  className={`h-10 px-4 font-semibold ${isUangPasSelected ? "bg-green-600 hover:bg-green-700 text-white" : ""}`}
+                  onClick={() => {
+                    if (isUangPasSelected) {
+                      // Unselect
+                      setIsUangPasSelected(false);
+                      setAmountPaid("");
+                    } else {
+                      // Select
+                      setIsUangPasSelected(true);
+                      setIsHutangMode(false);
+                      setAmountPaid(String(Math.ceil(total)));
+                    }
+                    setPaymentError("");
+                  }}
+                >
+                  {isUangPasSelected ? "✓ Uang Pas" : "💵 Uang Pas"}
+                </Button>
+                <Button
+                  type="button"
+                  variant={isHutangMode ? "default" : "outline"}
+                  className={`h-10 px-4 font-semibold ${isHutangMode ? "bg-red-500 hover:bg-red-600 text-white" : "border-red-200 text-red-600 hover:bg-red-50"}`}
+                  onClick={() => {
+                    if (isHutangMode) {
+                      setIsHutangMode(false);
+                    } else {
+                      setIsHutangMode(true);
+                      setIsUangPasSelected(false);
+                      setAmountPaid("");
+                      setShowHutangDialog(true);
+                    }
+                    setPaymentError("");
+                  }}
+                >
+                  <CreditCard className="h-4 w-4 mr-1" />
+                  {isHutangMode ? "✓ Hutang" : "Hutang"}
+                </Button>
+              </div>
+              <div className="flex flex-col items-end">
+                {discountAmount > 0 && (
+                  <div className="flex items-center gap-1 text-xs">
+                    <span className="text-gray-400 line-through">{formatCurrency(subtotal)}</span>
+                    <span className="text-red-500 font-semibold">-{discountPercent}%</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-500">Total:</span>
+                  <span className="text-xl font-bold text-amber-600">{formatCurrency(total)}</span>
+                </div>
               </div>
             </div>
 
@@ -296,13 +474,13 @@ const CartScreen = () => {
               <div className="text-red-600 text-xs text-center">{paymentError}</div>
             )}
 
-            {/* Tombol Konfirmasi - hanya aktif jika Uang Pas dipilih */}
+            {/* Tombol Konfirmasi - aktif jika Uang Pas atau Hutang dipilih */}
             <Button
-              className={`w-full h-11 text-base font-semibold ${isUangPasSelected ? "bg-amber-600 hover:bg-amber-700" : "bg-gray-300 cursor-not-allowed"}`}
-              onClick={handleConfirmPayment}
-              disabled={!isUangPasSelected}
+              className={`w-full h-11 text-base font-semibold ${(isUangPasSelected || isHutangMode) ? (isHutangMode ? "bg-red-500 hover:bg-red-600" : "bg-amber-600 hover:bg-amber-700") : "bg-gray-300 cursor-not-allowed"}`}
+              onClick={isHutangMode ? () => setShowHutangDialog(true) : handleConfirmPayment}
+              disabled={!isUangPasSelected && !isHutangMode}
             >
-              ✓ Konfirmasi Pembayaran
+              {isHutangMode ? "📝 Catat Hutang" : "✓ Konfirmasi Pembayaran"}
             </Button>
           </div>
         )}
@@ -392,6 +570,68 @@ const CartScreen = () => {
               </Button>
             </DialogFooter>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Hutang Dialog - Input Customer Name */}
+      <Dialog open={showHutangDialog} onOpenChange={(open) => {
+        setShowHutangDialog(open);
+        if (!open) {
+          setPaymentError("");
+        }
+      }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CreditCard className="h-5 w-5 text-red-500" />
+              Catat Hutang
+            </DialogTitle>
+            <DialogDescription>
+              Masukkan nama pelanggan untuk mencatat hutang.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Nama Pelanggan</label>
+              <Input
+                placeholder="Masukkan nama pelanggan..."
+                value={hutangCustomerName}
+                onChange={(e) => setHutangCustomerName(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="bg-red-50 p-3 rounded-lg border border-red-200">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-red-700 font-medium">Total Hutang:</span>
+                <span className="text-xl font-bold text-red-600">{formatCurrency(total)}</span>
+              </div>
+              <div className="text-xs text-red-500 mt-1">
+                {cart.length} item dalam keranjang
+              </div>
+            </div>
+            {paymentError && (
+              <div className="text-red-600 text-xs text-center bg-red-50 p-2 rounded">{paymentError}</div>
+            )}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowHutangDialog(false);
+                setIsHutangMode(false);
+                setHutangCustomerName("");
+                setPaymentError("");
+              }}
+            >
+              Batal
+            </Button>
+            <Button
+              className="bg-red-500 hover:bg-red-600 text-white"
+              onClick={confirmHutang}
+            >
+              ✓ Konfirmasi Hutang
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

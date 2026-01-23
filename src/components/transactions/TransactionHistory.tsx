@@ -769,7 +769,7 @@ const TransactionHistory: React.FC = () => {
   }, []);
 
   return (
-    <div className="bg-background h-screen flex flex-col overflow-hidden pb-16">
+    <div className="bg-background h-screen flex flex-col overflow-hidden">
       <div className="container mx-auto px-2 sm:px-4 py-2 flex-1 flex flex-col min-h-0">
 
         <div className="flex flex-wrap gap-2 mb-4 items-center">
@@ -809,7 +809,7 @@ const TransactionHistory: React.FC = () => {
             <TabsTrigger value="history" className="flex-1 py-3 px-4 text-sm font-semibold text-gray-500 bg-white border border-gray-200 rounded-xl transition-all duration-200 data-[state=active]:bg-gradient-to-r data-[state=active]:from-violet-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:shadow-purple-500/30 data-[state=active]:scale-[1.02] hover:border-purple-300 hover:text-purple-600">Tukar</TabsTrigger>
           </TabsList>
 
-          <div className="flex-1 overflow-y-auto pb-4 px-0.5">
+          <div className="flex-1 overflow-y-auto pb-16 px-0.5">
             {/* Hari ini (default uses today's date via dateRange) */}
             <TabsContent value="all" className="space-y-4 mt-0">
               {(() => {
@@ -837,9 +837,24 @@ const TransactionHistory: React.FC = () => {
                               </Badge>
                             </div>
                           </div>
-                          <div className="flex justify-between items-center mt-2 text-xs text-muted-foreground">
-                            <p>{t.items.length} item</p>
-                            <ChevronRight className="h-4 w-4" />
+                          <div className="mt-3 pt-2 border-t border-dashed">
+                            <div className="flex flex-wrap gap-1.5">
+                              {t.items.slice(0, 3).map((item, idx) => (
+                                <div key={idx} className="flex items-center gap-1 bg-gray-50 dark:bg-gray-800/50 px-2 py-0.5 rounded text-[10px] text-muted-foreground border border-gray-100 dark:border-gray-800">
+                                  <span className="font-medium text-gray-700 dark:text-gray-300 line-clamp-1">{item.name}</span>
+                                  <span className="text-amber-600 font-bold shrink-0">x{item.quantity}</span>
+                                </div>
+                              ))}
+                              {t.items.length > 3 && (
+                                <div className="text-[10px] text-muted-foreground px-1 py-0.5">
+                                  +{t.items.length - 3} lainnya...
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex justify-between items-center mt-2">
+                              <span className="text-[10px] text-muted-foreground italic">Total {t.items.length} item</span>
+                              <ChevronRight className="h-4 w-4 text-gray-400" />
+                            </div>
                           </div>
                         </CardContent>
                       </Card>

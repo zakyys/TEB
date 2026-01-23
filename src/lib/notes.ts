@@ -103,3 +103,26 @@ export function getActiveHutang(): Note[] {
 export function getTotalHutangAmount(): number {
     return getActiveHutang().reduce((sum, n) => sum + (n.amount || 0), 0);
 }
+
+// Menghapus semua catatan (kecuali hutang atau semuanya)
+export function clearNotes(includeHutang: boolean = false): void {
+    if (includeHutang) {
+        saveToLS(NOTES_KEY, []);
+    } else {
+        const notes = getNotes();
+        const nonHutangNotes = notes.filter(n => n.type === 'hutang');
+        saveToLS(NOTES_KEY, nonHutangNotes);
+    }
+}
+
+// Menghapus semua hutang
+export function clearHutang(onlyCompleted: boolean = false): void {
+    const notes = getNotes();
+    let newNotes;
+    if (onlyCompleted) {
+        newNotes = notes.filter(n => !(n.type === 'hutang' && n.completed));
+    } else {
+        newNotes = notes.filter(n => n.type !== 'hutang');
+    }
+    saveToLS(NOTES_KEY, newNotes);
+}

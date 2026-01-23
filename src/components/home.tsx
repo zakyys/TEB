@@ -37,7 +37,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import * as XLSX from "xlsx";
-import { getNotes, getActiveNotes, getActiveNotesCount, addNote, completeNote, deleteNote, updateNote, Note, getActiveHutang, getTotalHutangAmount } from "@/lib/notes";
+import { getNotes, getActiveNotes, getActiveNotesCount, addNote, completeNote, deleteNote, updateNote, Note, getActiveHutang, getTotalHutangAmount, clearNotes, clearHutang } from "@/lib/notes";
 
 interface Transaction {
   id: string;
@@ -97,7 +97,7 @@ const Dashboard = () => {
   const [activeNotesCount, setActiveNotesCount] = useState(0);
   const [notesList, setNotesList] = useState<Note[]>([]);
   const [newNoteContent, setNewNoteContent] = useState("");
-  const [newNoteType, setNewNoteType] = useState<Note['type']>("hutang");
+  const [newNoteType, setNewNoteType] = useState<Note['type']>("pengingat");
   const [newNoteCustomerName, setNewNoteCustomerName] = useState("");
   const [newNoteAmount, setNewNoteAmount] = useState("");
   const [confirmCompleteNoteId, setConfirmCompleteNoteId] = useState<string | null>(null);
@@ -105,6 +105,13 @@ const Dashboard = () => {
   const [editNoteId, setEditNoteId] = useState<string | null>(null);
   const [showCompletedNotes, setShowCompletedNotes] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  // Hutang specific states
+  const [hutangDialogOpen, setHutangDialogOpen] = useState(false);
+  const [activeHutangCount, setActiveHutangCount] = useState(0);
+  const [totalHutangAmount, setTotalHutangAmount] = useState(0);
+  const [confirmCompleteHutangId, setConfirmCompleteHutangId] = useState<string | null>(null);
+  const [confirmDeleteHutangId, setConfirmDeleteHutangId] = useState<string | null>(null);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -245,6 +252,19 @@ const Dashboard = () => {
     setNotesList(notes);
     setActiveNotesCount(getActiveNotesCount());
   };
+
+  // Refresh hutang list
+  const refreshHutang = () => {
+    const activeHutang = getActiveHutang();
+    setActiveHutangCount(activeHutang.length);
+    setTotalHutangAmount(getTotalHutangAmount());
+    refreshNotes(); // Also refresh notes to get the list
+  };
+
+  // Load hutang count on mount
+  useEffect(() => {
+    refreshHutang();
+  }, [transactions]);
 
   // Handle add/edit note
   const handleSaveNote = () => {
@@ -415,6 +435,28 @@ const Dashboard = () => {
       price: item.price,
       total: item.quantity * item.price,
     })));
+
+  // Calculate total discount from today's transactions
+  const todayDiscountInfo = (() => {
+    let totalDiscountAmount = 0;
+    const discountDetails: { percent: number; amount: number }[] = [];
+
+    todayTransactions.forEach((t: any) => {
+      if (t.discountAmount && t.discountAmount > 0) {
+        totalDiscountAmount += t.discountAmount;
+        discountDetails.push({
+          percent: t.discountPercent || 0,
+          amount: t.discountAmount
+        });
+      }
+    });
+
+    return {
+      totalAmount: totalDiscountAmount,
+      details: discountDetails,
+      hasDiscount: totalDiscountAmount > 0
+    };
+  })();
 
   // Get week range in month (1-7, 8-14, 15-21, 22-end)
   const getWeekRangeInMonth = () => {
@@ -609,7 +651,16 @@ const Dashboard = () => {
           lost: visitorLostToday,
           lostList: lostDescriptions
         },
+        // Discount info from today's transactions
+        discount: {
+          totalAmount: todayDiscountInfo.totalAmount,
+          details: todayDiscountInfo.details,
+          hasDiscount: todayDiscountInfo.hasDiscount
+        },
         notes: getNotes().filter((n: any) => {
+          // Exclude hutang type - handled separately
+          if (n.type === 'hutang') return false;
+
           const creationDate = n.date.split('T')[0];
           const completionDate = n.completedAt ? n.completedAt.split('T')[0] : null;
 
@@ -625,6 +676,26 @@ const Dashboard = () => {
           content: n.content,
           amount: n.amount || 0,
           completed: n.completed || false
+        })),
+        // Hutang (Piutang) - terpisah dari notes
+        hutang: getNotes().filter((n: any) => {
+          if (n.type !== 'hutang') return false;
+
+          const creationDate = n.date.split('T')[0];
+          const completionDate = n.completedAt ? n.completedAt.split('T')[0] : null;
+
+          // Muncul di report jika:
+          // 1. Dibuat hari ini
+          // 2. Dilunasi hari ini
+          // 3. Masih belum lunas
+          return (creationDate === todayStr) || (completionDate === todayStr) || (!n.completed);
+        }).map((n: any) => ({
+          date: new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
+          customerName: n.customerName || '-',
+          content: n.content,
+          amount: n.amount || 0,
+          completed: n.completed || false,
+          completedAt: n.completedAt ? new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : null
         })),
         // Add exchanges array for LIST TUKAR BARANG table
         exchanges: exchangesToday.map(e => {
@@ -645,26 +716,40 @@ const Dashboard = () => {
           };
         }),
         sendNotification: true, // Tell Google Script to send Telegram message
-        telegramBotToken: currentConfig.telegramBotToken,
-        telegramChatId: currentConfig.telegramChatId,
-        // Full Backup for Google Drive
+        // Full Backup for Google Drive (format compatible with Restore)
         fullBackup: {
-          exportDate: new Date().toISOString(),
-          version: "4.0",
-          products: getFromLS<any[]>('bengkel_products', []),
-          transactions: transactions,
-          visitors: {
-            log: getFromLS<any[]>('bengkel_visitors_log', []),
-            lostLog: getFromLS<any[]>('bengkel_visitor_lost', [])
-          },
-          exchanges: allExchanges,
-          refunds: allRefunds,
-          notes: getNotes(),
-          profile: getFromLS<any>('bengkel_profile', {}),
+          type: "full-backup",
+          timestamp: new Date().toISOString(),
+          version: "2.2",
+          data: {
+            products: getFromLS<any[]>(LS_KEYS.PRODUCTS, []),
+            transactions: transactions,
+            profile: getFromLS<any>(LS_KEYS.PROFILE, null),
+            visitorsLog: getFromLS<any[]>(LS_KEYS.VISITORS_LOG, []),
+            visitorLostLog: getFromLS<any[]>(LS_KEYS.VISITOR_LOST_LOG, []),
+            exchanges: allExchanges,
+            refunds: allRefunds,
+            notes: getNotes(),
+            cart: getFromLS<any[]>('CART', []),
+            enablePPN: getFromLS<boolean>('ENABLE_PPN', false),
+            multiTokoConnection: {
+              gasUrl: currentConfig.gasUrl,
+              telegramBotToken: currentConfig.telegramBotToken,
+              telegramChatId: currentConfig.telegramChatId,
+            },
+          }
         }
       };
 
       console.log("[GAS] Sending daily payload with fullBackup to:", currentConfig.gasUrl);
+      console.log("[DEBUG] fullBackup summary:", {
+        products: dailyPayload.fullBackup.data.products?.length || 0,
+        transactions: dailyPayload.fullBackup.data.transactions?.length || 0,
+        visitors: dailyPayload.fullBackup.data.visitorsLog?.length || 0,
+        exchanges: dailyPayload.fullBackup.data.exchanges?.length || 0,
+        notes: dailyPayload.fullBackup.data.notes?.length || 0,
+        payloadSize: JSON.stringify(dailyPayload).length + " bytes"
+      });
       await fetch(currentConfig.gasUrl, {
         method: "POST",
         mode: "no-cors",
@@ -747,10 +832,10 @@ const Dashboard = () => {
       }
 
       // Collect Monthly Exchanges/Refunds
-      const allExchanges = getExchanges();
+      const allExchangesMonthly = getExchanges();
       const startOfMonthStr = startOfMonth + 'T00:00:00.000Z';
 
-      const monthlyExchanges = allExchanges.filter((e: any) => {
+      const monthlyExchanges = allExchangesMonthly.filter((e: any) => {
         return e.date >= startOfMonthStr;
       }).map((e: any) => {
         // Fallback Logic: If originalPurchaseDate is missing, try to find it from transaction history
@@ -1222,52 +1307,7 @@ const Dashboard = () => {
                   </div>
                 </div>
 
-                {/* SKU Badges Section Swapped to Bottom */}
-                <div className="mt-1">
-                  <div className="flex items-center gap-1 text-[9px] text-muted-foreground font-medium mb-1 uppercase tracking-wider">
-                    <span>Ringkasan Penjualan (pcs) :</span>
-                    <ChevronDown className="h-2.5 w-2.5" />
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {dailySales.itemSummary.length > 0 ? (
-                      dailySales.itemSummary.map((item, idx) => {
-                        const colorMap: Record<string, { bg: string, text: string, border: string, badge: string }> = {
-                          'BG': { bg: 'bg-emerald-50/50', text: 'text-emerald-600', border: 'border-emerald-100', badge: 'bg-emerald-400' },
-                          'BA': { bg: 'bg-blue-50/50', text: 'text-blue-600', border: 'border-blue-100', badge: 'bg-blue-400' },
-                          'TL': { bg: 'bg-purple-50/50', text: 'text-purple-600', border: 'border-purple-100', badge: 'bg-purple-400' },
-                          'KG': { bg: 'bg-orange-50/50', text: 'text-orange-600', border: 'border-orange-100', badge: 'bg-orange-400' },
-                          'BK': { bg: 'bg-yellow-50/50', text: 'text-yellow-600', border: 'border-yellow-100', badge: 'bg-yellow-400' },
-                        };
-
-                        const colors = colorMap[item.prefix] || {
-                          bg: 'bg-gray-50/50',
-                          text: 'text-gray-600',
-                          border: 'border-gray-100',
-                          badge: 'bg-gray-400'
-                        };
-
-                        return (
-                          <div
-                            key={idx}
-                            className={`flex items-center ${colors.bg} border ${colors.border} rounded overflow-hidden shadow-sm transition-all hover:shadow-md group`}
-                          >
-                            <div className={`${colors.badge} text-white text-[8px] font-bold px-1 py-0.5 transition-colors`}>
-                              {item.prefix}
-                            </div>
-                            <div className={`px-1.5 py-0.5 text-[10px] font-extrabold ${colors.text}`}>
-                              {item.qty}
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="flex items-center text-sm text-gray-500 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-100">
-                        <ShoppingCart className="h-4 w-4 mr-2 text-amber-500" />
-                        {dailySales.transactions} Transaksi
-                      </div>
-                    )}
-                  </div>
-                </div>
+                {/* Removed SKU Badges Section (moved below) */}
               </div>
 
               <div className="flex flex-col items-end shrink-0">
@@ -1318,25 +1358,86 @@ const Dashboard = () => {
         {/* Visitors Section */}
         <div className="mb-6">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-medium text-muted-foreground">📊 Data Tamu Hari Ini</h3>
-            {/* Notes/Reminder Button with Badge */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 px-3 text-xs border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 text-purple-700 relative"
-              onClick={() => {
-                refreshNotes();
-                setNotesDialogOpen(true);
-              }}
-            >
-              <StickyNote className="h-3.5 w-3.5 mr-1.5" />
-              Catatan
-              {activeNotesCount > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-sm animate-pulse">
-                  {activeNotesCount}
-                </span>
-              )}
-            </Button>
+            {/* Replacement Header: Ringkasan Penjualan */}
+            <div className="flex-1">
+              <div className="flex items-center gap-1 text-[10px] text-muted-foreground font-bold mb-1.5 uppercase tracking-wider">
+                <span>📦 Ringkasan Penjualan (pcs)</span>
+                <ChevronDown className="h-3 w-3" />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {dailySales.itemSummary.length > 0 ? (
+                  dailySales.itemSummary.map((item, idx) => {
+                    const colorMap: Record<string, { bg: string, text: string, border: string, badge: string }> = {
+                      'BG': { bg: 'bg-emerald-50/50', text: 'text-emerald-600', border: 'border-emerald-100', badge: 'bg-emerald-400' },
+                      'BA': { bg: 'bg-blue-50/50', text: 'text-blue-600', border: 'border-blue-100', badge: 'bg-blue-400' },
+                      'TL': { bg: 'bg-purple-50/50', text: 'text-purple-600', border: 'border-purple-100', badge: 'bg-purple-400' },
+                      'KG': { bg: 'bg-orange-50/50', text: 'text-orange-600', border: 'border-orange-100', badge: 'bg-orange-400' },
+                      'BK': { bg: 'bg-yellow-50/50', text: 'text-yellow-600', border: 'border-yellow-100', badge: 'bg-yellow-400' },
+                    };
+
+                    const colors = colorMap[item.prefix] || {
+                      bg: 'bg-gray-50/50',
+                      text: 'text-gray-600',
+                      border: 'border-gray-100',
+                      badge: 'bg-gray-400'
+                    };
+
+                    return (
+                      <div
+                        key={idx}
+                        className={`flex items-center ${colors.bg} border ${colors.border} rounded overflow-hidden shadow-sm transition-all hover:shadow-md group`}
+                      >
+                        <div className={`${colors.badge} text-white text-[8px] font-bold px-1 py-0.5 transition-colors`}>
+                          {item.prefix}
+                        </div>
+                        <div className={`px-1.5 py-0.5 text-[10px] font-extrabold ${colors.text}`}>
+                          {item.qty}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-xs text-muted-foreground italic">Belum ada penjualan hari ini</div>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              {/* Hutang Button with Badge */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-3 text-xs border-red-200 bg-red-50 hover:bg-red-100 hover:border-red-300 text-red-700 relative"
+                onClick={() => {
+                  refreshHutang();
+                  setHutangDialogOpen(true);
+                }}
+              >
+                💳 Hutang
+                {activeHutangCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-sm animate-pulse">
+                    {activeHutangCount}
+                  </span>
+                )}
+              </Button>
+              {/* Notes/Reminder Button with Badge */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-3 text-xs border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 text-purple-700 relative"
+                onClick={() => {
+                  refreshNotes();
+                  setNotesDialogOpen(true);
+                }}
+              >
+                <StickyNote className="h-3.5 w-3.5 mr-1.5" />
+                Catatan
+                {notesList.filter(n => n.type !== 'hutang' && !n.completed).length > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-sm animate-pulse">
+                    {notesList.filter(n => n.type !== 'hutang' && !n.completed).length}
+                  </span>
+                )}
+              </Button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             {/* Tamu Sebelum Jam 12 */}
@@ -1575,9 +1676,26 @@ const Dashboard = () => {
                   <StickyNote className="h-5 w-5 text-purple-600" />
                   Catatan & Pengingat
                 </DialogTitle>
+                {notesList.filter(n => n.type !== 'hutang').length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 text-[10px] text-red-500 hover:text-red-600 hover:bg-red-50 font-bold"
+                    onClick={() => {
+                      if (confirm('Hapus semua catatan?')) {
+                        clearNotes(false);
+                        refreshNotes();
+                      }
+                    }}
+                  >
+                    <Trash2 className="h-3 w-3 mr-1" /> HAPUS SEMUA
+                  </Button>
+                )}
               </div>
               <DialogDescription>
-                {activeNotesCount > 0 ? `${activeNotesCount} catatan aktif` : 'Tidak ada catatan aktif'}
+                {notesList.filter(n => n.type !== 'hutang' && !n.completed).length > 0
+                  ? `${notesList.filter(n => n.type !== 'hutang' && !n.completed).length} catatan aktif`
+                  : 'Tidak ada catatan aktif'}
               </DialogDescription>
             </DialogHeader>
 
@@ -1590,7 +1708,7 @@ const Dashboard = () => {
                   className={`text-xs flex-1 ${!showCompletedNotes ? 'bg-purple-600 hover:bg-purple-700' : ''}`}
                   onClick={() => setShowCompletedNotes(false)}
                 >
-                  Aktif ({getActiveNotes().length})
+                  Aktif ({notesList.filter(n => n.type !== 'hutang' && !n.completed).length})
                 </Button>
                 <Button
                   variant={showCompletedNotes ? "default" : "outline"}
@@ -1598,12 +1716,13 @@ const Dashboard = () => {
                   className={`text-xs flex-1 ${showCompletedNotes ? 'bg-gray-600 hover:bg-gray-700' : ''}`}
                   onClick={() => setShowCompletedNotes(true)}
                 >
-                  Selesai ({notesList.filter(n => n.completed).length})
+                  Selesai ({notesList.filter(n => n.type !== 'hutang' && n.completed).length})
                 </Button>
               </div>
 
-              {/* Notes list */}
+              {/* Notes list - exclude hutang type */}
               {notesList
+                .filter(n => n.type !== 'hutang') // Exclude hutang - shown in separate Hutang dialog
                 .filter(n => showCompletedNotes ? n.completed : !n.completed)
                 .map(note => (
                   <div
@@ -1723,18 +1842,6 @@ const Dashboard = () => {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="flex-1 text-[10px] h-9 bg-red-50 border-red-200 text-red-700 hover:bg-red-100 font-bold"
-                  onClick={() => {
-                    setNewNoteType('hutang');
-                    setAddNoteDialogOpen(true);
-                    setNotesDialogOpen(false);
-                  }}
-                >
-                  💰 HUTANG
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
                   className="flex-1 text-[10px] h-9 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 font-bold"
                   onClick={() => {
                     setNewNoteType('pengingat');
@@ -1761,6 +1868,166 @@ const Dashboard = () => {
           </DialogContent>
         </Dialog>
 
+        {/* Hutang List Dialog */}
+        <Dialog open={hutangDialogOpen} onOpenChange={setHutangDialogOpen}>
+          <DialogContent className="max-w-md max-h-[85vh] overflow-hidden flex flex-col">
+            <DialogHeader>
+              <div className="flex items-center justify-between">
+                <DialogTitle className="flex items-center gap-2">
+                  <TrendingUp className="h-5 w-5 text-red-600" />
+                  💳 Daftar Hutang
+                </DialogTitle>
+                {notesList.filter(n => n.type === 'hutang').length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 text-[10px] text-red-500 hover:text-red-600 hover:bg-red-50 font-bold"
+                    onClick={() => {
+                      if (confirm('Hapus semua daftar hutang?')) {
+                        clearHutang(false);
+                        refreshHutang();
+                      }
+                    }}
+                  >
+                    <Trash2 className="h-3 w-3 mr-1" /> HAPUS SEMUA
+                  </Button>
+                )}
+              </div>
+              <DialogDescription>
+                {activeHutangCount > 0
+                  ? `${activeHutangCount} hutang aktif - Total: ${formatCurrency(totalHutangAmount)}`
+                  : 'Tidak ada hutang aktif'}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex-1 overflow-y-auto space-y-2 max-h-[50vh] pr-1">
+              {/* Filter tabs - same as Notes */}
+              <div className="flex gap-2 sticky top-0 bg-white z-10 pb-2">
+                <Button
+                  variant={!showCompletedNotes ? "default" : "outline"}
+                  size="sm"
+                  className={`text-xs flex-1 ${!showCompletedNotes ? 'bg-red-600 hover:bg-red-700' : ''}`}
+                  onClick={() => setShowCompletedNotes(false)}
+                >
+                  Belum Lunas ({notesList.filter(n => n.type === 'hutang' && !n.completed).length})
+                </Button>
+                <Button
+                  variant={showCompletedNotes ? "default" : "outline"}
+                  size="sm"
+                  className={`text-xs flex-1 ${showCompletedNotes ? 'bg-gray-600 hover:bg-gray-700' : ''}`}
+                  onClick={() => setShowCompletedNotes(true)}
+                >
+                  Lunas ({notesList.filter(n => n.type === 'hutang' && n.completed).length})
+                </Button>
+              </div>
+
+              {/* Hutang list - same card style as Notes */}
+              {notesList
+                .filter(n => n.type === 'hutang')
+                .filter(n => showCompletedNotes ? n.completed : !n.completed)
+                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                .map(hutang => (
+                  <div
+                    key={hutang.id}
+                    className={`p-2 rounded-lg border transition-all ${hutang.completed
+                      ? 'bg-gray-50 border-gray-200 opacity-60'
+                      : 'bg-red-50 border-red-200 shadow-sm'
+                      }`}
+                  >
+                    {/* 1. Header Row (Labels Left, Actions Right) */}
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[8px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-red-200 text-red-800">
+                          💰 Hutang
+                        </span>
+
+                        {hutang.completed && (
+                          <span className="text-[8px] px-1.5 py-0.5 rounded bg-green-200 text-green-800 font-bold uppercase whitespace-nowrap">
+                            ✓ Lunas
+                          </span>
+                        )}
+
+                        <div className="flex items-center gap-1 opacity-70">
+                          <Calendar className="h-2.5 w-2.5 text-red-500" />
+                          <span className="text-[8px] text-red-600 font-bold whitespace-nowrap">
+                            {new Date(hutang.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Actions Group (Horizontal) */}
+                      <div className="flex items-center gap-1 shrink-0">
+                        {!hutang.completed && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 w-6 p-0 bg-green-50 border-green-300 text-green-700 hover:bg-green-100"
+                            onClick={() => setConfirmCompleteHutangId(hutang.id)}
+                          >
+                            <Check className="h-2.5 w-2.5" />
+                          </Button>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 w-6 p-0 bg-red-50 border-red-200 text-red-500 hover:bg-red-50"
+                          onClick={() => setConfirmDeleteHutangId(hutang.id)}
+                        >
+                          <Trash2 className="h-2.5 w-2.5" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* 2. Content Section (Vertical flow) */}
+                    <div className="flex-1 min-w-0">
+                      {/* Name & Amount Row */}
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className="text-[13px] font-black text-gray-800 leading-none uppercase tracking-tight shrink-0">
+                          {hutang.customerName || 'Tanpa Nama'}
+                        </div>
+
+                        <div className="flex-1 h-[1px] bg-gray-200/50" />
+
+                        {hutang.amount && (
+                          <div className="text-[13px] font-black text-red-600 bg-red-100/80 border-red-200/50 px-2 py-0.5 rounded border shadow-sm leading-none shrink-0">
+                            {formatCurrency(hutang.amount)}
+                          </div>
+                        )}
+
+                        <div className="flex-1 h-[1px] bg-gray-200/50" />
+                      </div>
+
+                      {/* Description Area (Adaptive Height) */}
+                      <div className={`text-[11px] leading-snug whitespace-pre-wrap text-gray-600 ${hutang.completed ? 'line-through' : ''}`}>
+                        {hutang.content}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+              {/* Empty state */}
+              {notesList.filter(n => n.type === 'hutang' && (showCompletedNotes ? n.completed : !n.completed)).length === 0 && (
+                <div className="text-center py-8 text-muted-foreground">
+                  <div className="text-4xl mb-2">{showCompletedNotes ? '📋' : '✨'}</div>
+                  <div className="font-medium">{showCompletedNotes ? 'Belum ada hutang lunas' : 'Tidak ada hutang!'}</div>
+                  <div className="text-xs">{showCompletedNotes ? 'Hutang yang dilunasi akan muncul di sini' : 'Semua hutang sudah lunas'}</div>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter className="border-t pt-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={() => setHutangDialogOpen(false)}
+              >
+                Tutup
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Add/Edit Note Dialog */}
         <Dialog open={addNoteDialogOpen} onOpenChange={(open) => {
           if (!open) {
@@ -1769,7 +2036,7 @@ const Dashboard = () => {
             setNewNoteContent("");
             setNewNoteCustomerName("");
             setNewNoteAmount("");
-            setNewNoteType("hutang");
+            setNewNoteType("pengingat");
             // Reopen notes list dialog
             setNotesDialogOpen(true);
           }
@@ -1788,29 +2055,16 @@ const Dashboard = () => {
                     <SelectValue placeholder="Pilih jenis" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="hutang">💰 Hutang</SelectItem>
                     <SelectItem value="pengingat">🔔 Pengingat</SelectItem>
                     <SelectItem value="belanja">🛒 Belanja Harian</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
-              {/* Customer Name (for hutang) */}
-              {newNoteType === 'hutang' && (
+              {/* Amount (for belanja) with Rp prefix */}
+              {newNoteType === 'belanja' && (
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Nama Pelanggan</label>
-                  <Input
-                    value={newNoteCustomerName}
-                    onChange={(e) => setNewNoteCustomerName(e.target.value)}
-                    placeholder="Nama pelanggan yang hutang"
-                  />
-                </div>
-              )}
-
-              {/* Amount (for hutang & belanja) with Rp prefix */}
-              {(newNoteType === 'hutang' || newNoteType === 'belanja') && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">{newNoteType === 'hutang' ? 'Jumlah Hutang' : 'Total Belanja'}</label>
+                  <label className="text-sm font-medium">Total Belanja</label>
                   <div className="flex items-center border rounded-md overflow-hidden focus-within:ring-2 focus-within:ring-purple-500">
                     <span className="px-3 py-2 bg-gray-100 border-r text-sm text-gray-600 font-medium">Rp</span>
                     <input
@@ -1836,7 +2090,7 @@ const Dashboard = () => {
                 <Textarea
                   value={newNoteContent}
                   onChange={(e) => setNewNoteContent(e.target.value)}
-                  placeholder={newNoteType === 'hutang' ? 'Detail barang/keterangan...' : 'Isi catatan...'}
+                  placeholder="Isi catatan..."
                   rows={3}
                 />
               </div>
@@ -1914,6 +2168,76 @@ const Dashboard = () => {
                   if (confirmDeleteNoteId) {
                     handleDeleteNote(confirmDeleteNoteId);
                     setConfirmDeleteNoteId(null);
+                  }
+                }}
+              >
+                <Trash2 className="h-4 w-4 mr-1" />
+                Ya, Hapus
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+        {/* Confirm Complete Hutang Dialog */}
+        <Dialog open={!!confirmCompleteHutangId} onOpenChange={(open) => !open && setConfirmCompleteHutangId(null)}>
+          <DialogContent className="max-w-xs">
+            <DialogHeader>
+              <DialogTitle className="text-center">
+                Lunaskan Hutang{confirmCompleteHutangId && (() => {
+                  const hutang = notesList.find(n => n.id === confirmCompleteHutangId);
+                  return hutang?.customerName ? ` (${hutang.customerName})` : '';
+                })()}?
+              </DialogTitle>
+              <DialogDescription className="text-center">
+                Hutang akan ditandai sebagai LUNAS dan dipindahkan ke tab "Lunas"
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex gap-2 justify-center">
+              <Button
+                variant="outline"
+                onClick={() => setConfirmCompleteHutangId(null)}
+              >
+                Batal
+              </Button>
+              <Button
+                className="bg-green-600 hover:bg-green-700"
+                onClick={() => {
+                  if (confirmCompleteHutangId) {
+                    completeNote(confirmCompleteHutangId);
+                    refreshHutang();
+                    setConfirmCompleteHutangId(null);
+                  }
+                }}
+              >
+                <Check className="h-4 w-4 mr-1" />
+                Ya, Lunas
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Confirm Delete Hutang Dialog */}
+        <Dialog open={!!confirmDeleteHutangId} onOpenChange={(open) => !open && setConfirmDeleteHutangId(null)}>
+          <DialogContent className="max-w-xs">
+            <DialogHeader>
+              <DialogTitle className="text-center">Hapus Hutang?</DialogTitle>
+              <DialogDescription className="text-center">
+                Catatan hutang akan dihapus permanen dan tidak bisa dikembalikan
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex gap-2 justify-center">
+              <Button
+                variant="outline"
+                onClick={() => setConfirmDeleteHutangId(null)}
+              >
+                Batal
+              </Button>
+              <Button
+                className="bg-red-600 hover:bg-red-700"
+                onClick={() => {
+                  if (confirmDeleteHutangId) {
+                    deleteNote(confirmDeleteHutangId);
+                    refreshHutang();
+                    setConfirmDeleteHutangId(null);
                   }
                 }}
               >

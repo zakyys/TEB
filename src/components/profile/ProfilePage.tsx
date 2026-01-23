@@ -1058,7 +1058,7 @@ const ProfilePage = () => {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {archiveDays === 0 ? "⚠️ Hapus SEMUA Transaksi?" :
+              {archiveDays === 0 ? "⚠️ Hapus SEMUA Transaksi & Hutang?" :
                 archiveDays === -1 ? "🗑️ Hapus Kecuali Hari Ini?" :
                   `Hapus Transaksi > ${archiveDays} Hari?`}
             </AlertDialogTitle>
@@ -1066,7 +1066,7 @@ const ProfilePage = () => {
               {archiveDays === 0 ? (
                 <>
                   <span className="text-red-600 font-bold">PERINGATAN: </span>
-                  Tindakan ini akan menghapus SEMUA transaksi.
+                  Tindakan ini akan menghapus SEMUA transaksi, catatan, dan daftar hutang.
                   <br /><br />
                   Data TIDAK BISA dikembalikan!
                 </>

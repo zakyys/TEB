@@ -11,6 +11,8 @@ export interface CompleteTxParams {
   subtotal: number
   tax: number
   total: number
+  discountPercent?: number
+  discountAmount?: number
 }
 
 export interface CompleteTxResult {
@@ -19,7 +21,7 @@ export interface CompleteTxResult {
 }
 
 export async function completeTransactionUtil(params: CompleteTxParams): Promise<CompleteTxResult> {
-  const { cart, products, paymentMethod, amountPaid, subtotal, tax, total } = params
+  const { cart, products, paymentMethod, amountPaid, subtotal, tax, total, discountPercent, discountAmount } = params
   if (!cart || cart.length === 0) throw new Error('Cart kosong')
 
   // Customer selalu "Pelanggan Umum" karena fitur pelanggan dihapus
@@ -40,6 +42,8 @@ export async function completeTransactionUtil(params: CompleteTxParams): Promise
     subtotal,
     tax,
     total,
+    discountPercent: discountPercent || 0,
+    discountAmount: discountAmount || 0,
     isCashPayment: isCash,
     amountPaid: isCash ? amountPaid || 0 : 0,
     change,
