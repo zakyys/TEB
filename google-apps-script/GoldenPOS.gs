@@ -622,13 +622,13 @@ function saveMonthlyRecap(data) {
     sheet.setColumnWidth(25, 20);
 
     // ═══════════════════════════════════════════════════════
-    // SECTION 5: CATATAN - REKAP BULANAN (Columns Z-AF) -> Shifted from Y-AE
+    // SECTION 5: CATATAN & BELANJA KASIR - REKAP BULANAN (Columns Z-AC)
     // ═══════════════════════════════════════════════════════
     var notesRow = 1;
 
     // Header Title
-    sheet.getRange(notesRow, 26, 1, 7).merge() // Z:AF (column 26-32)
-        .setValue("📝 CATATAN - REKAP BULANAN")
+    sheet.getRange(notesRow, 26, 1, 4).merge() // Z:AC (column 26-29)
+        .setValue("📝 CATATAN & BELANJA KASIR")
         .setFontWeight("bold")
         .setFontSize(14)
         .setBackground("#7B1FA2") // Purple 700
@@ -637,16 +637,16 @@ function saveMonthlyRecap(data) {
     notesRow++;
 
     // Sub-header (Last Update)
-    sheet.getRange(notesRow, 26, 1, 7).merge()
+    sheet.getRange(notesRow, 26, 1, 4).merge()
         .setValue("Terakhir Update: " + timestamp)
         .setFontStyle("italic")
         .setFontColor("#666666")
         .setHorizontalAlignment("center");
     notesRow++;
 
-    // Table Headers
-    sheet.getRange(notesRow, 26, 1, 7)
-        .setValues([["📅 Tgl Buat", "🏷️ Jenis", "👤 Nama", "📝 Isi Catatan", "💰 Jumlah", "Status", "📅 Tgl Selesai"]])
+    // Table Headers (hanya 4 kolom: Tgl, Jenis, Isi Catatan, Jumlah)
+    sheet.getRange(notesRow, 26, 1, 4)
+        .setValues([["📅 Tgl", "🏷️ Jenis", "📝 Isi Catatan", "💰 Jumlah"]])
         .setFontWeight("bold")
         .setBackground("#E1BEE7") // Purple 100
         .setHorizontalAlignment("center")
@@ -656,42 +656,30 @@ function saveMonthlyRecap(data) {
     var monthlyNotes = data.monthlyNotes || [];
     if (monthlyNotes.length > 0) {
         monthlyNotes.forEach(function (note) {
-            var statusText = note.completed ? "SELESAI ✅" : "PENDING ⏳";
-            var rowColor = note.completed ? "#F5F5F5" : "#FFFFFF";
-
-            sheet.getRange(notesRow, 26, 1, 7)
+            sheet.getRange(notesRow, 26, 1, 4)
                 .setValues([[
                     note.date,
                     note.type.toUpperCase(),
-                    note.customerName,
                     note.content,
-                    note.amount,
-                    statusText,
-                    note.completedAt || "-"
+                    note.amount
                 ]])
-                .setBackground(rowColor)
                 .setVerticalAlignment("middle")
                 .setBorder(true, true, true, true, true, true, "#CE93D8", SpreadsheetApp.BorderStyle.SOLID);
 
             // Format Amount
             if (note.amount > 0) {
-                sheet.getRange(notesRow, 30).setNumberFormat("Rp #,##0"); // Column 30 = AD
+                sheet.getRange(notesRow, 29).setNumberFormat("Rp #,##0"); // Column 29 = AC
             }
 
             // Color for type
             var typeCell = sheet.getRange(notesRow, 27); // Column 27 = AA
-            if (note.type === 'hutang') typeCell.setFontColor("#D32F2F").setFontWeight("bold");
-            else if (note.type === 'belanja') typeCell.setFontColor("#2E7D32").setFontWeight("bold");
-
-            // Color for status
-            var statusCell = sheet.getRange(notesRow, 31); // Column 31 = AE
-            if (note.completed) statusCell.setFontColor("#2E7D32").setFontWeight("bold");
-            else statusCell.setFontColor("#F57C00").setFontWeight("bold");
+            if (note.type === 'belanja') typeCell.setFontColor("#2E7D32").setFontWeight("bold");
+            else typeCell.setFontColor("#7B1FA2").setFontWeight("bold");
 
             notesRow++;
         });
     } else {
-        sheet.getRange(notesRow, 26, 1, 7).merge()
+        sheet.getRange(notesRow, 26, 1, 4).merge()
             .setValue("✅ Tidak ada catatan aktif bulan ini!")
             .setFontStyle("italic")
             .setHorizontalAlignment("center")
@@ -705,7 +693,7 @@ function saveMonthlyRecap(data) {
         sheet.setColumnWidth(13, 100); // Date Lost (M)
         sheet.setColumnWidth(14, 300); // Description Lost (N)
         sheet.autoResizeColumns(16, 9); // P-X (Tukar Barang)
-        sheet.autoResizeColumns(26, 7); // Z-AF (Catatan)
+        sheet.autoResizeColumns(26, 4); // Z-AC (Catatan)
     } catch (e) { }
 
     return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
@@ -829,7 +817,7 @@ function saveSalesData(data) {
         .setValue("🕒 Terakhir Update: " + timeStr + " WIB")
         .setFontWeight("bold")
         .setFontSize(10)
-        .setHorizontalAlignment("center")
+        .setHorizontalAlignment("right")
         .setBackground("#E8EAF6")
         .setFontColor("#3F51B5");
     currentRow++;
@@ -899,7 +887,9 @@ function saveSalesData(data) {
         });
     }
 
-    // No spacer here to save space
+    // Spacer sebelum Penjualan
+    sheet.getRange(currentRow, 1).setValue("");
+    currentRow++;
 
     // ═══════════════════════════════════════════════════════
     // SECTION: Penjualan
@@ -943,8 +933,16 @@ function saveSalesData(data) {
         var hasDiscount = discount.hasDiscount || false;
         var discountAmount = discount.totalAmount || 0;
 
-        if (hasDiscount && discountAmount > 0) {
-            // SUBTOTAL row (before discount)
+        // Check if there's exchange difference
+        var exchangeDiff = data.exchangeDifference || {};
+        var hasExchange = exchangeDiff.hasExchange || false;
+        var exchangeAmount = exchangeDiff.totalAmount || 0;
+
+        // Determine if we need SUBTOTAL (if there's discount OR exchange)
+        var needSubtotal = (hasDiscount && discountAmount > 0) || hasExchange;
+
+        if (needSubtotal) {
+            // SUBTOTAL row (before adjustments)
             sheet.getRange(currentRow, 1, 1, 4)
                 .setValues([["", "", "SUBTOTAL:", totalSales]])
                 .setFontWeight("bold")
@@ -955,26 +953,48 @@ function saveSalesData(data) {
             sheet.getRange(currentRow, 3, 1, 2).setHorizontalAlignment("right");
             currentRow++;
 
-            // DISCOUNT row - show each discount transaction
-            var discountDetails = discount.details || [];
-            discountDetails.forEach(function(d, idx) {
-                var discountLabel = "Diskon " + String.fromCharCode(65 + idx); // A, B, C, ...
-                if (d.percent > 0) {
-                    discountLabel += " (" + d.percent + "%)";
-                }
+            // DISCOUNT rows - show each discount transaction
+            if (hasDiscount && discountAmount > 0) {
+                var discountDetails = discount.details || [];
+                discountDetails.forEach(function(d, idx) {
+                    var discountLabel = "Diskon " + String.fromCharCode(65 + idx); // A, B, C, ...
+                    if (d.percent > 0) {
+                        discountLabel += " (" + d.percent + "%)";
+                    }
+                    sheet.getRange(currentRow, 1, 1, 4)
+                        .setValues([["", "", discountLabel + ":", -d.amount]])
+                        .setFontWeight("bold")
+                        .setBackground("#FFEBEE")
+                        .setFontColor("#D32F2F")
+                        .setBorder(true, true, true, true, true, true, "#EF9A9A", SpreadsheetApp.BorderStyle.SOLID);
+                    sheet.getRange(currentRow, 4).setNumberFormat("-#,##0");
+                    sheet.getRange(currentRow, 3, 1, 2).setHorizontalAlignment("right");
+                    currentRow++;
+                });
+            }
+
+            // SELISIH TUKAR row - show if there are exchanges today
+            if (hasExchange) {
+                var selisihLabel = "Selisih Tukar (" + exchangeDiff.count + "x):";
+                var selisihColor = exchangeAmount >= 0 ? "#2E7D32" : "#D32F2F"; // Green if +, Red if -
+                var selisihBg = exchangeAmount >= 0 ? "#E8F5E9" : "#FFEBEE"; // Light green or light red
+                var selisihBorder = exchangeAmount >= 0 ? "#A5D6A7" : "#EF9A9A";
+                var selisihFormat = exchangeAmount >= 0 ? "+#,##0" : "#,##0"; // Show + for positive
+
                 sheet.getRange(currentRow, 1, 1, 4)
-                    .setValues([["", "", discountLabel + ":", -d.amount]])
+                    .setValues([["", "", selisihLabel, exchangeAmount]])
                     .setFontWeight("bold")
-                    .setBackground("#FFEBEE")
-                    .setFontColor("#D32F2F")
-                    .setBorder(true, true, true, true, true, true, "#EF9A9A", SpreadsheetApp.BorderStyle.SOLID);
-                sheet.getRange(currentRow, 4).setNumberFormat("-#,##0");
+                    .setBackground(selisihBg)
+                    .setFontColor(selisihColor)
+                    .setBorder(true, true, true, true, true, true, selisihBorder, SpreadsheetApp.BorderStyle.SOLID);
+                sheet.getRange(currentRow, 4).setNumberFormat(selisihFormat);
                 sheet.getRange(currentRow, 3, 1, 2).setHorizontalAlignment("right");
                 currentRow++;
-            });
+            }
 
-            // GRAND TOTAL row (after discount)
-            var grandTotal = totalSales - discountAmount;
+            // GRAND TOTAL row (after discount and exchange difference)
+            // Grand Total = Subtotal - Discount + Exchange Difference
+            var grandTotal = totalSales - discountAmount + exchangeAmount;
             sheet.getRange(currentRow, 1, 1, 4)
                 .setValues([["", "", "GRAND TOTAL:", grandTotal]])
                 .setFontWeight("bold")
@@ -986,7 +1006,7 @@ function saveSalesData(data) {
             sheet.getRange(currentRow, 3, 1, 2).setHorizontalAlignment("right");
             currentRow++;
         } else {
-            // No discount - show regular TOTAL row
+            // No discount and no exchange - show regular TOTAL row
             sheet.getRange(currentRow, 1, 1, 4)
                 .setValues([["", "", "TOTAL:", totalSales]])
                 .setFontWeight("bold")
@@ -1094,7 +1114,7 @@ function saveSalesData(data) {
             .setFontWeight("bold")
             .setFontSize(11)
             .setBackground("#FF9800")
-            .setFontColor("#FFFFFF");
+            .setFontColor("#000000");
         currentRow++;
 
         // Header tukar barang - same as Recap (9 columns)
@@ -1173,31 +1193,42 @@ function saveSalesData(data) {
             .setValues([["📊 Total Transaksi Tukar: " + exchanges.length, "", "", "", "", "", "", "TOTAL SELISIH:", totalExchangeSelisih]])
             .setFontWeight("bold")
             .setBackground("#FF9800")
-            .setFontColor("#FFFFFF")
+            .setFontColor("#000000")
             .setBorder(true, true, true, true, true, true, "#E65100", SpreadsheetApp.BorderStyle.SOLID);
 
         var totalCell = sheet.getRange(currentRow, 9);
         totalCell.setNumberFormat("\"Rp \"+#,##0;\"Rp \"-#,##0;\"Rp \"0");
+        
+        // Warna selisih: hijau kalau +, merah kalau -
+        if (totalExchangeSelisih > 0) {
+            totalCell.setFontColor("#2E7D32"); // Hijau
+        } else if (totalExchangeSelisih < 0) {
+            totalCell.setFontColor("#D32F2F"); // Merah
+        }
 
         currentRow++;
     }
+
+    // Spacer sebelum Hutang
+    sheet.getRange(currentRow, 1).setValue("");
+    currentRow++;
 
     // ═══════════════════════════════════════════════════════
     // SECTION: Hutang / Piutang (Piutang Dagang)
     // ═══════════════════════════════════════════════════════
     var hutangList = data.hutang || [];
     if (hutangList.length > 0) {
-        sheet.getRange(currentRow, 1, 1, 8).merge()
-            .setValue("💳 DAFTAR HUTANG (PIUTANG)")
+        sheet.getRange(currentRow, 1, 1, 7).merge()
+            .setValue("💳 DAFTAR HUTANG (Akan muncul setiap hari sampai Lunas)")
             .setFontWeight("bold")
             .setFontSize(11)
             .setBackground("#FFEBEE")
             .setFontColor("#C62828");
         currentRow++;
 
-        // Header Hutang
-        sheet.getRange(currentRow, 1, 1, 8)
-            .setValues([["📅 Tgl", "👤 Nama Pelanggan", "📝 Detail Barang/Keterangan", "💰 Jumlah", "✅", "Status", "📅 Tgl Lunas", ""]])
+        // Header Hutang (7 kolom, tanpa kolom kosong)
+        sheet.getRange(currentRow, 1, 1, 7)
+            .setValues([["📅 Tgl", "👤 Nama Pelanggan", "📝 Detail Barang/Keterangan", "💰 Jumlah", "✅", "Status", "📅 Tgl Lunas"]])
             .setFontWeight("bold")
             .setBackground("#FFCDD2")
             .setHorizontalAlignment("center")
@@ -1209,7 +1240,7 @@ function saveSalesData(data) {
             var statusIcon = h.completed ? "✅" : "⏳";
             var statusText = h.completed ? "LUNAS" : "BELUM LUNAS";
             
-            sheet.getRange(currentRow, 1, 1, 8)
+            sheet.getRange(currentRow, 1, 1, 7)
                 .setValues([[
                     h.date,
                     h.customerName || "-",
@@ -1217,8 +1248,7 @@ function saveSalesData(data) {
                     h.amount,
                     statusIcon,
                     statusText,
-                    h.completedAt || "-",
-                    ""
+                    h.completedAt || "-"
                 ]])
                 .setBorder(true, true, true, true, true, true, "#EF9A9A", SpreadsheetApp.BorderStyle.SOLID);
 
@@ -1235,8 +1265,8 @@ function saveSalesData(data) {
         });
 
         // Summary Hutang Aktif
-        sheet.getRange(currentRow, 1, 1, 8)
-            .setValues([["📊 Total Hutang Belum Lunas:", "", "", totalHutang, "", "", "", ""]])
+        sheet.getRange(currentRow, 1, 1, 7)
+            .setValues([["📊 Total Hutang Belum Lunas:", "", "", totalHutang, "", "", ""]])
             .setFontWeight("bold")
             .setBackground("#FFEBEE")
             .setBorder(true, true, true, true, true, true, "#E53935", SpreadsheetApp.BorderStyle.SOLID);
@@ -1245,21 +1275,21 @@ function saveSalesData(data) {
     }
 
     // ═══════════════════════════════════════════════════════
-    // SECTION: Catatan / Pengingat
+    // SECTION: Catatan & Belanja Kasir
     // ═══════════════════════════════════════════════════════
     var notes = data.notes || [];
     if (notes.length > 0) {
-        sheet.getRange(currentRow, 1, 1, 8).merge()
-            .setValue("📝 CATATAN")
+        sheet.getRange(currentRow, 1, 1, 4).merge()
+            .setValue("📝 CATATAN & BELANJA KASIR")
             .setFontWeight("bold")
             .setFontSize(11)
             .setBackground("#F3E5F5")
             .setFontColor("#7B1FA2");
         currentRow++;
 
-        // Header Catatan
-        sheet.getRange(currentRow, 1, 1, 8)
-            .setValues([["📅 Tgl", "🏷️ Jenis", "👤 Nama", "📝 Isi Catatan", "💰 Jumlah", "✅", "Status", ""]])
+        // Header Catatan (hanya 4 kolom: Tgl, Jenis, Isi Catatan, Jumlah)
+        sheet.getRange(currentRow, 1, 1, 4)
+            .setValues([["📅 Tgl", "🏷️ Jenis", "📝 Isi Catatan", "💰 Jumlah"]])
             .setFontWeight("bold")
             .setBackground("#E1BEE7")
             .setHorizontalAlignment("center")
@@ -1267,20 +1297,14 @@ function saveSalesData(data) {
         currentRow++;
 
         notes.forEach(function (n) {
-            var statusIcon = n.completed ? "✅" : "⏳";
-            var statusText = n.completed ? "SELESAI" : "PENDING";
-            var typeColor = n.type === 'hutang' ? "#D32F2F" : (n.type === 'belanja' ? "#2E7D32" : "#7B1FA2");
+            var typeColor = n.type === 'belanja' ? "#2E7D32" : "#7B1FA2";
 
-            sheet.getRange(currentRow, 1, 1, 8)
+            sheet.getRange(currentRow, 1, 1, 4)
                 .setValues([[
                     n.date,
                     n.type.toUpperCase(),
-                    n.customerName || "-",
                     n.content,
-                    n.amount,
-                    statusIcon,
-                    statusText,
-                    ""
+                    n.amount
                 ]])
                 .setBorder(true, true, true, true, true, true, "#CE93D8", SpreadsheetApp.BorderStyle.SOLID);
 
@@ -1289,12 +1313,8 @@ function saveSalesData(data) {
 
             // Format Amount
             if (n.amount > 0) {
-                sheet.getRange(currentRow, 5).setNumberFormat("Rp #,##0");
+                sheet.getRange(currentRow, 4).setNumberFormat("Rp #,##0");
             }
-
-            // Style untuk Status
-            var statCell = sheet.getRange(currentRow, 7);
-            statCell.setFontWeight("bold").setFontColor(n.completed ? "#2E7D32" : "#F57C00").setHorizontalAlignment("center");
 
             currentRow++;
         });

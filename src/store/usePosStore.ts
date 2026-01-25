@@ -65,9 +65,11 @@ export const usePosStore = create<PosState>()(
         },
 
         updateQuantity: (id, quantity) => {
-          if (quantity <= 0) {
+          if (quantity < 0) {
+            // Only remove when quantity is negative (explicit delete action)
             set((state) => ({ cart: state.cart.filter((i) => i.id !== id) }))
           } else {
+            // Allow 0 quantity - item stays in cart with 0 qty
             set((state) => ({
               cart: state.cart.map((i) => (i.id === id ? { ...i, quantity } : i)),
             }))

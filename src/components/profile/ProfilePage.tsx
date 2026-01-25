@@ -818,7 +818,15 @@ const ProfilePage = () => {
               {/* Cleanup buttons */}
               <div className="space-y-2">
                 <p className="text-sm font-medium">Hapus Transaksi Lama</p>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
+                  <Button
+                    variant="outline"
+                    className="bg-cyan-50 hover:bg-cyan-100 border-cyan-200 text-cyan-700"
+                    onClick={() => { setArchiveDays(3); setShowArchiveConfirm(true); }}
+                  >
+                    <Trash2 className="h-4 w-4 mr-1" />
+                    &gt;3 hari
+                  </Button>
                   <Button
                     variant="outline"
                     className="bg-yellow-50 hover:bg-yellow-100 border-yellow-200 text-yellow-700"

@@ -105,3 +105,15 @@
     .receipt .divider { border-top: 1px dashed #000; margin: 6px 0; }
     .receipt .row { display: flex; justify-content: space-between; gap: 8px; }
   }
+
+/* Slow pulse animation for highlighting */
+@keyframes slow-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.4);
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 0 20px 4px rgba(168, 85, 247, 0.3);
+  }
+}

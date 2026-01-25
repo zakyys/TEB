@@ -21,6 +21,9 @@ import {
   ChevronDown,
   Wifi,
   WifiOff,
+  ArrowDown,
+  ArrowUp,
+  Users,
 } from "lucide-react";
 
 import { Progress } from "@/components/ui/progress";
@@ -84,6 +87,8 @@ const Dashboard = () => {
   const [editingLostDesc, setEditingLostDesc] = useState("");
   const [visitorBefore12, setVisitorBefore12] = useState(0);
   const [visitorAfter12, setVisitorAfter12] = useState(0);
+  const [visitorYesterday, setVisitorYesterday] = useState(0);
+  const [avgVisitorMonth, setAvgVisitorMonth] = useState(0);
   const [soldItemsPage, setSoldItemsPage] = useState(1);
   const [sendingToSheets, setSendingToSheets] = useState(false);
   const [sheetsSent, setSheetsSent] = useState(false);
@@ -112,6 +117,9 @@ const Dashboard = () => {
   const [totalHutangAmount, setTotalHutangAmount] = useState(0);
   const [confirmCompleteHutangId, setConfirmCompleteHutangId] = useState<string | null>(null);
   const [confirmDeleteHutangId, setConfirmDeleteHutangId] = useState<string | null>(null);
+
+  // Monthly revenue detail dialog
+  const [monthlyRevenueDialogOpen, setMonthlyRevenueDialogOpen] = useState(false);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -228,9 +236,10 @@ const Dashboard = () => {
     };
   }, []);
 
-  // Visitor stats today
+  // Visitor stats today, yesterday, and monthly average
   useEffect(() => {
-    const todayStr = new Date().toISOString().split("T")[0];
+    const today = new Date();
+    const todayStr = today.toISOString().split("T")[0];
     const { visitors, lost } = getVisitorStatsByDate(todayStr);
     const { before12, after12 } = getVisitorStatsByTime(todayStr);
     setVisitorToday(visitors);
@@ -238,6 +247,32 @@ const Dashboard = () => {
     setLostDescriptions(getLostDescriptionsByDate(todayStr));
     setVisitorBefore12(before12);
     setVisitorAfter12(after12);
+
+    // Yesterday's visitors
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split("T")[0];
+    const { visitors: yesterdayVisitors } = getVisitorStatsByDate(yesterdayStr);
+    setVisitorYesterday(yesterdayVisitors);
+
+    // Monthly average - calculate from day 1 of current month to today
+    const year = today.getFullYear();
+    const month = today.getMonth();
+    const dayOfMonth = today.getDate();
+    let totalMonthVisitors = 0;
+    let daysWithData = 0;
+
+    for (let day = 1; day <= dayOfMonth; day++) {
+      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const { visitors: dayVisitors } = getVisitorStatsByDate(dateStr);
+      if (dayVisitors > 0) {
+        totalMonthVisitors += dayVisitors;
+        daysWithData++;
+      }
+    }
+
+    const avg = daysWithData > 0 ? Math.round(totalMonthVisitors / daysWithData) : 0;
+    setAvgVisitorMonth(avg);
   }, [transactions]);
 
   // Load notes count
@@ -351,21 +386,26 @@ const Dashboard = () => {
   if (yesterdayTotal > 0) percentageIncrease = Math.round(((todayTotal - yesterdayTotal) / yesterdayTotal) * 100);
   else if (todayTotal > 0) percentageIncrease = 100;
 
-  // Today's item summary by SKU prefix (TL, BG, BA, etc.)
+  // Today's item summary by SKU prefix (TL, BG, BA, etc.) - Frequency based (per transaction)
   const todayItemSummaryArr = (() => {
     const summary: Record<string, number> = {};
     todayTransactions.forEach(t => {
+      const prefixesInTx = new Set<string>();
       t.items.forEach(item => {
         const sku = item.sku || "";
         const prefix = sku.split("-")[0].toUpperCase();
         if (prefix && prefix.length >= 2) {
-          summary[prefix] = (summary[prefix] || 0) + item.quantity;
+          prefixesInTx.add(prefix);
         }
       });
+      prefixesInTx.forEach(p => {
+        summary[p] = (summary[p] || 0) + 1;
+      });
     });
+
     const sortOrder = ["BG", "BA", "TL", "KG", "BK"];
     return Object.entries(summary)
-      .map(([prefix, qty]) => ({ prefix, qty }))
+      .map(([prefix, count]) => ({ prefix, qty: count }))
       .sort((a, b) => {
         const idxA = sortOrder.indexOf(a.prefix);
         const idxB = sortOrder.indexOf(b.prefix);
@@ -427,7 +467,10 @@ const Dashboard = () => {
   };
 
   // Sold items today with pagination
+  // Exclude adjustment transactions from exchanges (id starts with "ADJ-" or customer is "Tukar Barang")
+  // These items are already recorded in "LIST TUKAR BARANG" table
   const allSoldItemsToday = todayTransactions
+    .filter(t => !t.id.startsWith('ADJ-') && t.customer !== 'Tukar Barang')
     .flatMap(t => t.items.map(item => ({
       sku: item.sku || '-',
       name: item.name,
@@ -603,6 +646,24 @@ const Dashboard = () => {
     const refundsToday = allRefunds.filter(r => r.date.split('T')[0] === todayStr);
     const exchangesToday = allExchanges.filter(e => e.date.split('T')[0] === todayStr);
 
+    // ═══════════════════════════════════════════════════════════════════
+    // AUTO-COMPLETE: Catatan & Belanja yang lewat hari ini
+    // (Hutang tidak terpengaruh - tetap pending sampai dilunasi manual)
+    // ═══════════════════════════════════════════════════════════════════
+    const allNotes = getNotes();
+    allNotes.forEach((n: any) => {
+      // Skip hutang - handled separately
+      if (n.type === 'hutang') return;
+      // Skip if already completed
+      if (n.completed) return;
+
+      const creationDate = n.date.split('T')[0];
+      // If note is from before today and not completed, auto-complete it
+      if (creationDate < todayStr) {
+        completeNote(n.id);
+      }
+    });
+
     setSendingToSheets(true);
     try {
       // ═══════════════════════════════════════════
@@ -657,25 +718,27 @@ const Dashboard = () => {
           details: todayDiscountInfo.details,
           hasDiscount: todayDiscountInfo.hasDiscount
         },
+        // Exchange difference info (total selisih harga dari penukaran hari ini)
+        // Positive = customer paid more (tambah bayar), Negative = store gave refund (kembalian)
+        exchangeDifference: {
+          totalAmount: exchangesToday.reduce((sum, e) => sum + (e.priceDifference || 0), 0),
+          count: exchangesToday.length,
+          hasExchange: exchangesToday.length > 0
+        },
         notes: getNotes().filter((n: any) => {
           // Exclude hutang type - handled separately
           if (n.type === 'hutang') return false;
 
           const creationDate = n.date.split('T')[0];
-          const completionDate = n.completedAt ? n.completedAt.split('T')[0] : null;
 
-          // Muncul di report jika:
-          // 1. Dibuat hari ini
-          // 2. Diselesaikan hari ini
-          // 3. Masih pending (belum selesai)
-          return (creationDate === todayStr) || (completionDate === todayStr) || (!n.completed);
+          // Catatan & Belanja: HANYA dikirim jika dibuat hari ini (1 hari saja)
+          // Berbeda dengan hutang yang persist sampai dilunasi
+          return creationDate === todayStr;
         }).map((n: any) => ({
           date: new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
           type: n.type,
-          customerName: n.customerName || '-',
           content: n.content,
-          amount: n.amount || 0,
-          completed: n.completed || false
+          amount: n.amount || 0
         })),
         // Hutang (Piutang) - terpisah dari notes
         hutang: getNotes().filter((n: any) => {
@@ -859,8 +922,10 @@ const Dashboard = () => {
           tglBeli: displayTglBeli,
           barangLama: e.originalItem.name || e.originalItem.sku,
           qtyLama: e.originalItem.quantity,
+          hargaLama: e.originalItem?.price || 0,
           barangBaru: e.newItem.name || e.newItem.sku,
           qtyBaru: e.newItem.quantity,
+          hargaBaru: e.newItem?.price || 0,
           selisih: e.priceDifference
         };
       });
@@ -886,15 +951,17 @@ const Dashboard = () => {
           dailyVisitors: dailyVisitors,
           allLostList: allLostList,
           monthlyExchanges: monthlyExchanges, // NEW: Exchange Data
-          monthlyNotes: getNotes().map((n: any) => ({
-            id: n.id,
+          monthlyNotes: getNotes().filter((n: any) => {
+            // Exclude hutang type - only catatan & belanja for monthly recap
+            if (n.type === 'hutang') return false;
+            // Filter hanya catatan yang dibuat di bulan ini
+            const noteDate = n.date.split('T')[0];
+            return noteDate >= startOfMonth;
+          }).map((n: any) => ({
             date: new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
             type: n.type,
-            customerName: n.customerName || '-',
             content: n.content,
-            amount: n.amount || 0,
-            completed: n.completed || false,
-            completedAt: n.completedAt ? new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : '-'
+            amount: n.amount || 0
           })),
           telegramBotToken: currentConfig.telegramBotToken,
           telegramChatId: currentConfig.telegramChatId,
@@ -1219,7 +1286,7 @@ const Dashboard = () => {
         {/* Daily Sales Summary */}
 
         <Card className="mb-6 border-t-4 border-t-amber-500">
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-0">
             <CardTitle className="text-lg flex items-center justify-between">
               <span>OMZET HARI INI</span>
               <div className="flex items-center gap-2">
@@ -1280,50 +1347,110 @@ const Dashboard = () => {
               </div>
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-0">
             <div className="text-3xl font-bold text-amber-600">{formatCurrency(dailySales.total)}</div>
             <div className="flex items-center mt-2 mb-3 text-sm text-muted-foreground">
               <Calendar className="h-4 w-4 mr-1.5 text-blue-500" />
               {new Date().toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
             </div>
 
-            <div className="flex items-start justify-between gap-4">
+            {/* Visitor & Lost Summary - Split-Card Style & Reverted Layout */}
+            <div className="flex items-start justify-between gap-4 mt-3">
               <div className="flex flex-col gap-3 flex-1">
-                {/* Tamu Section Swapped to Top */}
-                <div className="flex flex-col gap-1 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2 py-1 rounded-full bg-blue-100 text-blue-700 text-xs">Tamu</span>
-                    <span className="font-medium">{visitorToday}</span>
-                  </div>
-                  <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
-                    <div className="flex items-center gap-1.5">
-                      <span className="px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-medium">&lt;12</span>
-                      <span>{visitorBefore12}</span>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* Tamu Card */}
+                  <div className="flex items-stretch overflow-hidden rounded-md border border-blue-200 dark:border-blue-900 bg-white dark:bg-gray-800 shadow-sm w-fit h-6">
+                    <div className="bg-blue-500 px-1.5 flex items-center justify-center">
+                      <span className="text-white text-[9px] font-bold tracking-tight">TAMU</span>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-medium">&gt;12</span>
-                      <span>{visitorAfter12}</span>
+                    <div className="px-1.5 flex items-center justify-center min-w-[24px]">
+                      <span className="font-bold text-xs text-blue-700 dark:text-blue-400">{visitorToday}</span>
+                    </div>
+                  </div>
+
+                  {/* Before 12 Card */}
+                  <div className="flex items-stretch overflow-hidden rounded-md border border-green-200 dark:border-green-900 bg-white dark:bg-gray-800 shadow-sm w-fit h-5">
+                    <div className="bg-green-500 px-1 flex items-center justify-center">
+                      <span className="text-white text-[7px] font-black flex items-center gap-0.5"><ArrowDown className="h-1.5 w-1.5 stroke-[3px]" />12</span>
+                    </div>
+                    <div className="px-1.5 flex items-center justify-center">
+                      <span className="font-bold text-[10px] text-green-700 dark:text-green-400">{visitorBefore12}</span>
+                    </div>
+                  </div>
+                  {/* After 12 Card */}
+                  <div className="flex items-stretch overflow-hidden rounded-md border border-orange-200 dark:border-orange-900 bg-white dark:bg-gray-800 shadow-sm w-fit h-5">
+                    <div className="bg-orange-500 px-1 flex items-center justify-center">
+                      <span className="text-white text-[7px] font-black flex items-center gap-0.5"><ArrowUp className="h-1.5 w-1.5 stroke-[3px]" />12</span>
+                    </div>
+                    <div className="px-1.5 flex items-center justify-center">
+                      <span className="font-bold text-[10px] text-orange-700 dark:text-orange-400">{visitorAfter12}</span>
                     </div>
                   </div>
                 </div>
-
-                {/* Removed SKU Badges Section (moved below) */}
               </div>
 
               <div className="flex flex-col items-end shrink-0">
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs">Lost</span>
-                  <span className="font-medium">{visitorLostToday}</span>
-                </div>
-                {lostDescriptions.length > 0 && (
-                  <div className="mt-1 text-xs text-muted-foreground text-right space-y-0.5">
-                    {lostDescriptions.map((desc, i) => (
-                      <div key={i} className="line-clamp-1">• {desc}</div>
-                    ))}
+                {/* Lost Card */}
+                <div className="flex items-stretch overflow-hidden rounded-md border border-red-200 dark:border-red-900 bg-white dark:bg-gray-800 shadow-sm w-fit h-6">
+                  <div className="bg-red-500 px-1.5 flex items-center justify-center">
+                    <span className="text-white text-[9px] font-black tracking-tight">LOST</span>
                   </div>
-                )}
+                  <div className="px-1.5 flex items-center justify-center min-w-[24px]">
+                    <span className="font-bold text-xs text-red-700 dark:text-red-400">{visitorLostToday}</span>
+                  </div>
+                </div>
               </div>
             </div>
+
+            {/* Visitor Comparison & Average + Lost Descriptions (side by side) */}
+            <div className="flex items-start justify-between gap-4 mt-3 pt-3 border-t border-gray-100">
+              {/* Left: Comparison & Average */}
+              <div className="flex flex-col gap-1">
+                {/* Comparison with yesterday */}
+                <div className="flex items-center gap-1.5 text-xs">
+                  {visitorToday > visitorYesterday ? (
+                    <>
+                      <span className="text-green-600">📈</span>
+                      <span className="font-semibold text-green-600">+{visitorToday - visitorYesterday} tamu dari kemarin</span>
+                    </>
+                  ) : visitorToday < visitorYesterday ? (
+                    <>
+                      <span className="text-red-500">📉</span>
+                      <span className="font-semibold text-red-500">{visitorToday - visitorYesterday} tamu dari kemarin</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-gray-500">➖</span>
+                      <span className="font-medium text-gray-500">Sama seperti kemarin</span>
+                    </>
+                  )}
+                </div>
+                {/* Monthly average */}
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span>📊</span>
+                  <span>Rata-rata: <span className="font-semibold text-blue-600">{avgVisitorMonth} tamu/hari</span></span>
+                </div>
+              </div>
+
+              {/* Right: Lost Descriptions */}
+              {lostDescriptions.length > 0 && (
+                <div className="text-[10px] text-right space-y-0.5">
+                  {lostDescriptions.map((desc, i) => (
+                    <div key={i} className="line-clamp-1 font-semibold text-red-600 dark:text-red-400">• {desc}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Button to see monthly revenue detail */}
+            <Button
+              variant="outline"
+              className="w-full mt-4 border-amber-200 text-amber-700 hover:bg-amber-50 hover:border-amber-300"
+              onClick={() => setMonthlyRevenueDialogOpen(true)}
+            >
+              Lihat Detail Omset Bulan Ini
+              <ArrowUpRight className="h-4 w-4 ml-2" />
+            </Button>
           </CardContent>
         </Card>
 
@@ -1357,87 +1484,55 @@ const Dashboard = () => {
 
         {/* Visitors Section */}
         <div className="mb-6">
-          <div className="flex items-center justify-between mb-3">
-            {/* Replacement Header: Ringkasan Penjualan */}
-            <div className="flex-1">
-              <div className="flex items-center gap-1 text-[10px] text-muted-foreground font-bold mb-1.5 uppercase tracking-wider">
-                <span>📦 Ringkasan Penjualan (pcs)</span>
-                <ChevronDown className="h-3 w-3" />
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {dailySales.itemSummary.length > 0 ? (
-                  dailySales.itemSummary.map((item, idx) => {
-                    const colorMap: Record<string, { bg: string, text: string, border: string, badge: string }> = {
-                      'BG': { bg: 'bg-emerald-50/50', text: 'text-emerald-600', border: 'border-emerald-100', badge: 'bg-emerald-400' },
-                      'BA': { bg: 'bg-blue-50/50', text: 'text-blue-600', border: 'border-blue-100', badge: 'bg-blue-400' },
-                      'TL': { bg: 'bg-purple-50/50', text: 'text-purple-600', border: 'border-purple-100', badge: 'bg-purple-400' },
-                      'KG': { bg: 'bg-orange-50/50', text: 'text-orange-600', border: 'border-orange-100', badge: 'bg-orange-400' },
-                      'BK': { bg: 'bg-yellow-50/50', text: 'text-yellow-600', border: 'border-yellow-100', badge: 'bg-yellow-400' },
-                    };
+          <div className="flex items-center gap-2 mb-3">
+            {/* Hutang Button with Badge */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-3 text-xs border-red-200 bg-red-50 hover:bg-red-100 hover:border-red-300 text-red-700 relative"
+              onClick={() => {
+                refreshHutang();
+                setHutangDialogOpen(true);
+              }}
+            >
+              💳 Hutang
+              {activeHutangCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-sm animate-pulse">
+                  {activeHutangCount}
+                </span>
+              )}
+            </Button>
+            {/* Notes/Reminder Button with Badge */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-3 text-xs border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 text-purple-700 relative"
+              onClick={() => {
+                refreshNotes();
+                setNotesDialogOpen(true);
+              }}
+            >
+              <StickyNote className="h-3.5 w-3.5 mr-1.5" />
+              Catatan
+              {notesList.filter(n => n.type !== 'hutang' && !n.completed).length > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-sm animate-pulse">
+                  {notesList.filter(n => n.type !== 'hutang' && !n.completed).length}
+                </span>
+              )}
+            </Button>
 
-                    const colors = colorMap[item.prefix] || {
-                      bg: 'bg-gray-50/50',
-                      text: 'text-gray-600',
-                      border: 'border-gray-100',
-                      badge: 'bg-gray-400'
-                    };
+            {/* Spacer to push Lost button to right */}
+            <div className="flex-1" />
 
-                    return (
-                      <div
-                        key={idx}
-                        className={`flex items-center ${colors.bg} border ${colors.border} rounded overflow-hidden shadow-sm transition-all hover:shadow-md group`}
-                      >
-                        <div className={`${colors.badge} text-white text-[8px] font-bold px-1 py-0.5 transition-colors`}>
-                          {item.prefix}
-                        </div>
-                        <div className={`px-1.5 py-0.5 text-[10px] font-extrabold ${colors.text}`}>
-                          {item.qty}
-                        </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="text-xs text-muted-foreground italic">Belum ada penjualan hari ini</div>
-                )}
-              </div>
-            </div>
-            <div className="flex gap-2">
-              {/* Hutang Button with Badge */}
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-3 text-xs border-red-200 bg-red-50 hover:bg-red-100 hover:border-red-300 text-red-700 relative"
-                onClick={() => {
-                  refreshHutang();
-                  setHutangDialogOpen(true);
-                }}
-              >
-                💳 Hutang
-                {activeHutangCount > 0 && (
-                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-sm animate-pulse">
-                    {activeHutangCount}
-                  </span>
-                )}
-              </Button>
-              {/* Notes/Reminder Button with Badge */}
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-3 text-xs border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 text-purple-700 relative"
-                onClick={() => {
-                  refreshNotes();
-                  setNotesDialogOpen(true);
-                }}
-              >
-                <StickyNote className="h-3.5 w-3.5 mr-1.5" />
-                Catatan
-                {notesList.filter(n => n.type !== 'hutang' && !n.completed).length > 0 && (
-                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-sm animate-pulse">
-                    {notesList.filter(n => n.type !== 'hutang' && !n.completed).length}
-                  </span>
-                )}
-              </Button>
-            </div>
+            {/* Lost Button */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-3 text-xs border-red-300 bg-red-100 hover:bg-red-200 hover:border-red-400 text-red-700 relative"
+              onClick={() => { const todayStr = new Date().toISOString().split('T')[0]; setLostEntries(getLostEntriesByDate(todayStr)); setLostDialogOpen(true); }}
+            >
+              ❌ Catat Lost ({visitorLostToday})
+            </Button>
           </div>
           <div className="grid grid-cols-2 gap-3">
             {/* Tamu Sebelum Jam 12 */}
@@ -1495,11 +1590,6 @@ const Dashboard = () => {
               </div>
             </div>
           </div>
-          {/* Lost Buttons */}
-          <div className="grid grid-cols-2 gap-3 mt-3">
-            <Button variant="outline" className="h-11 bg-red-50 hover:bg-red-100 border-red-200 text-red-700" onClick={() => setLostDialogOpen(true)}>❌ Catat Lost</Button>
-            <Button variant="outline" className="h-11 text-muted-foreground hover:text-blue-500 hover:border-blue-300" onClick={() => { const todayStr = new Date().toISOString().split('T')[0]; setLostEntries(getLostEntriesByDate(todayStr)); setLostManageOpen(true); }}>✏️ Edit Lost ({visitorLostToday})</Button>
-          </div>
         </div>
 
         {/* Google Sheets + Telegram Quick Action */}
@@ -1530,39 +1620,59 @@ const Dashboard = () => {
           </CardContent>
         </Card>
 
-        {/* Lost Dialog - Add New */}
-        <Dialog open={lostDialogOpen} onOpenChange={setLostDialogOpen}>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Catat Tamu Lost</DialogTitle></DialogHeader>
-            <div className="space-y-2">
-              <label className="text-sm">Deskripsi (wajib)</label>
-              <Input value={lostDesc} onChange={(e) => setLostDesc(e.target.value)} placeholder="Contoh: Hanya tanya harga, stok kosong, dll" />
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setLostDialogOpen(false)}>Batal</Button>
-              <Button onClick={() => { try { addVisitorLost(lostDesc); const todayStr = new Date().toISOString().split('T')[0]; const { lost } = getVisitorStatsByDate(todayStr); setVisitorLostToday(lost); setLostDescriptions(getLostDescriptionsByDate(todayStr)); setLostDesc(""); setLostDialogOpen(false); } catch (e) { alert((e as Error).message); } }}>Simpan</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        {/* Lost Dialog - Combined Add & Manage */}
+        <Dialog open={lostDialogOpen} onOpenChange={(open) => {
+          setLostDialogOpen(open);
+          if (open) {
+            const todayStr = new Date().toISOString().split('T')[0];
+            setLostEntries(getLostEntriesByDate(todayStr));
+          }
+        }}>
+          <DialogContent className="top-[5%] translate-y-0 sm:max-w-md max-h-[85vh] overflow-hidden flex flex-col">
+            <DialogHeader><DialogTitle>❌ Catat Tamu Lost</DialogTitle></DialogHeader>
 
-        {/* Lost Management Dialog */}
-        <Dialog open={lostManageOpen} onOpenChange={setLostManageOpen}>
-          <DialogContent className="max-w-md">
-            <DialogHeader><DialogTitle>Kelola Lost Hari Ini</DialogTitle></DialogHeader>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
+            {/* Add New Lost Form */}
+            <div className="space-y-2 pb-3 border-b">
+              <label className="text-sm font-medium">Tambah Lost Baru</label>
+              <div className="flex gap-2">
+                <Input
+                  value={lostDesc}
+                  onChange={(e) => setLostDesc(e.target.value)}
+                  placeholder="Contoh: Hanya tanya harga, stok kosong, dll"
+                  className="flex-1"
+                />
+                <Button onClick={() => {
+                  try {
+                    addVisitorLost(lostDesc);
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    const { lost } = getVisitorStatsByDate(todayStr);
+                    setVisitorLostToday(lost);
+                    setLostDescriptions(getLostDescriptionsByDate(todayStr));
+                    setLostEntries(getLostEntriesByDate(todayStr));
+                    setLostDesc("");
+                  } catch (e) {
+                    alert((e as Error).message);
+                  }
+                }}>+ Tambah</Button>
+              </div>
+            </div>
+
+            {/* Existing Lost Entries List */}
+            <div className="flex-1 overflow-y-auto space-y-1 py-1">
+              <label className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">Daftar Lost Hari Ini ({lostEntries.length})</label>
               {lostEntries.length === 0 ? (
-                <div className="text-center text-muted-foreground py-4">Belum ada data lost hari ini</div>
+                <div className="text-center text-muted-foreground py-4 text-sm">Belum ada data lost hari ini</div>
               ) : (
-                lostEntries.map((entry) => (
-                  <div key={entry.ts} className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg">
+                lostEntries.sort((a, b) => b.ts - a.ts).map((entry) => (
+                  <div key={entry.ts} className="flex items-center gap-1 px-2 py-1 bg-muted/30 rounded border border-muted/50">
                     {editingLostTs === entry.ts ? (
                       <>
                         <Input
                           value={editingLostDesc}
                           onChange={(e) => setEditingLostDesc(e.target.value)}
-                          className="flex-1 h-8 text-sm"
+                          className="flex-1 h-6 text-xs"
                         />
-                        <Button size="sm" variant="ghost" className="h-8 px-2" onClick={() => {
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => {
                           if (updateLostDescription(entry.ts, editingLostDesc)) {
                             const todayStr = new Date().toISOString().split('T')[0];
                             setLostEntries(getLostEntriesByDate(todayStr));
@@ -1570,15 +1680,15 @@ const Dashboard = () => {
                           }
                           setEditingLostTs(null);
                         }}>✓</Button>
-                        <Button size="sm" variant="ghost" className="h-8 px-2" onClick={() => setEditingLostTs(null)}>✕</Button>
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => setEditingLostTs(null)}>✕</Button>
                       </>
                     ) : (
                       <>
-                        <span className="flex-1 text-sm truncate">{entry.description}</span>
-                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground hover:text-blue-500" onClick={() => { setEditingLostTs(entry.ts); setEditingLostDesc(entry.description); }}>
-                          <Pencil className="h-3 w-3" />
+                        <span className="flex-1 text-xs truncate">{entry.description}</span>
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-muted-foreground hover:text-blue-500" onClick={() => { setEditingLostTs(entry.ts); setEditingLostDesc(entry.description); }}>
+                          <Pencil className="h-2.5 w-2.5" />
                         </Button>
-                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground hover:text-red-500" onClick={() => {
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-muted-foreground hover:text-red-500" onClick={() => {
                           if (removeLostByTimestamp(entry.ts)) {
                             const todayStr = new Date().toISOString().split('T')[0];
                             const { lost } = getVisitorStatsByDate(todayStr);
@@ -1587,7 +1697,7 @@ const Dashboard = () => {
                             setLostDescriptions(getLostDescriptionsByDate(todayStr));
                           }
                         }}>
-                          <Trash2 className="h-3 w-3" />
+                          <Trash2 className="h-2.5 w-2.5" />
                         </Button>
                       </>
                     )}
@@ -1595,8 +1705,9 @@ const Dashboard = () => {
                 ))
               )}
             </div>
+
             <DialogFooter>
-              <Button variant="outline" onClick={() => setLostManageOpen(false)}>Tutup</Button>
+              <Button variant="outline" className="w-full" onClick={() => setLostDialogOpen(false)}>Tutup</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -1669,12 +1780,12 @@ const Dashboard = () => {
 
         {/* Notes List Dialog */}
         <Dialog open={notesDialogOpen} onOpenChange={setNotesDialogOpen}>
-          <DialogContent className="max-w-md max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogContent className="top-[5%] translate-y-0 max-w-md max-h-[85vh] overflow-hidden flex flex-col">
             <DialogHeader>
               <div className="flex items-center justify-between">
                 <DialogTitle className="flex items-center gap-2">
                   <StickyNote className="h-5 w-5 text-purple-600" />
-                  Catatan & Pengingat
+                  Catatan & Belanja
                 </DialogTitle>
                 {notesList.filter(n => n.type !== 'hutang').length > 0 && (
                   <Button
@@ -1745,7 +1856,7 @@ const Dashboard = () => {
                             ? 'bg-green-200 text-green-800'
                             : 'bg-blue-200 text-blue-800'
                           }`}>
-                          {note.type === 'hutang' ? '💰 Hutang' : note.type === 'belanja' ? '🛒 Belanja' : '🔔 Pengingat'}
+                          {note.type === 'hutang' ? '💰 Hutang' : note.type === 'belanja' ? '🛒 Belanja' : '📝 Catatan'}
                         </span>
 
                         {note.completed && (
@@ -1819,7 +1930,7 @@ const Dashboard = () => {
                         {note.type === 'hutang' ? (
                           note.content
                         ) : (
-                          note.type === 'belanja' ? 'Kebutuhan belanja harian' : 'Pengingat sistem'
+                          note.type === 'belanja' ? 'Kebutuhan belanja harian' : 'Catatan pribadi'
                         )}
                       </div>
                     </div>
@@ -1849,7 +1960,7 @@ const Dashboard = () => {
                     setNotesDialogOpen(false);
                   }}
                 >
-                  🔔 PENGINGAT
+                  📝 CATATAN
                 </Button>
                 <Button
                   variant="outline"
@@ -1870,7 +1981,7 @@ const Dashboard = () => {
 
         {/* Hutang List Dialog */}
         <Dialog open={hutangDialogOpen} onOpenChange={setHutangDialogOpen}>
-          <DialogContent className="max-w-md max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogContent className="top-[5%] translate-y-0 max-w-md max-h-[85vh] overflow-hidden flex flex-col">
             <DialogHeader>
               <div className="flex items-center justify-between">
                 <DialogTitle className="flex items-center gap-2">
@@ -2245,6 +2356,219 @@ const Dashboard = () => {
                 Ya, Hapus
               </Button>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Monthly Revenue Detail Dialog */}
+        <Dialog open={monthlyRevenueDialogOpen} onOpenChange={setMonthlyRevenueDialogOpen}>
+          <DialogContent className="max-w-md max-h-[85vh] overflow-hidden flex flex-col">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-amber-500" />
+                Detail Omset Bulan Ini
+              </DialogTitle>
+              <DialogDescription>
+                {new Date().toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex-1 overflow-y-auto pr-2 -mr-2">
+              {(() => {
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = now.getMonth();
+                const today = now.getDate();
+                const allExchanges = getExchanges();
+
+                // Calculate daily revenue with exchange adjustments
+                const dailyData: Array<{
+                  date: string;
+                  dateLabel: string;
+                  originalRevenue: number;
+                  adjustments: Array<{ type: 'tukar-keluar' | 'tukar-masuk' | 'refund'; amount: number; note: string; exchangeId?: string }>;
+                  actualRevenue: number;
+                }> = [];
+
+                let monthTotal = 0;
+                let adjustmentTotal = 0;
+
+                for (let day = 1; day <= today; day++) {
+                  const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                  const dateLabel = new Date(year, month, day).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+
+                  // Get transactions for this day
+                  const dayTransactions = transactions.filter(t =>
+                    t.date.startsWith(dateStr) && t.status !== 'refunded' && t.status !== 'cancelled'
+                  );
+                  const originalRevenue = dayTransactions.reduce((sum, t) => sum + t.total, 0);
+
+                  // Get exchange adjustments affecting this day
+                  // Exchanges that reduced original transaction on this date (negative)
+                  // AND exchanges that happened on this date (INFO only - already included in transactions)
+                  const adjustments: Array<{ type: 'tukar-keluar' | 'tukar-masuk' | 'refund'; amount: number; note: string; dateInfo?: string; exchangeId?: string }> = [];
+
+                  allExchanges.forEach(ex => {
+                    const exchangeDate = ex.date.split('T')[0];
+
+                    // Check if the original purchase was on this date (negative adjustment - item returned)
+                    if (ex.originalPurchaseDate) {
+                      const purchaseDate = ex.originalPurchaseDate.split('T')[0];
+                      if (purchaseDate === dateStr) {
+                        // Original transaction on this day was reduced
+                        const reducedAmount = ex.originalItem.price * ex.originalItem.quantity;
+                        // Shorten name for compact display (max 15 chars)
+                        const shortName = ex.originalItem.name.length > 15 ? ex.originalItem.name.substring(0, 15) + '...' : ex.originalItem.name;
+                        // Format exchange date for display
+                        const exDateLabel = new Date(ex.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+                        adjustments.push({
+                          type: 'tukar-keluar',
+                          amount: -reducedAmount,
+                          note: `${shortName} (${ex.originalItem.quantity} pcs)`,
+                          dateInfo: `Ditukar ${exDateLabel}`,
+                          exchangeId: ex.id
+                        });
+                      }
+                    }
+
+                    // Check if exchange happened on this date - show selisih (price difference)
+                    // NOTE: This is INFO only - the actual transactions already reflect the new item
+                    if (exchangeDate === dateStr) {
+                      const selisih = ex.priceDifference || 0;
+                      // Shorten names for compact display (max 12 chars each)
+                      const shortOld = ex.originalItem.name.length > 12 ? ex.originalItem.name.substring(0, 12) + '...' : ex.originalItem.name;
+                      const shortNew = ex.newItem.name.length > 12 ? ex.newItem.name.substring(0, 12) + '...' : ex.newItem.name;
+                      // Format original purchase date for display
+                      const purchaseDateLabel = ex.originalPurchaseDate
+                        ? new Date(ex.originalPurchaseDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
+                        : null;
+                      adjustments.push({
+                        type: 'tukar-masuk',
+                        amount: selisih,
+                        note: `${shortOld} → ${shortNew}`,
+                        dateInfo: purchaseDateLabel ? `Dari ${purchaseDateLabel}` : undefined,
+                        exchangeId: ex.id
+                      });
+                    }
+                  });
+
+                  // Only count tukar-keluar (negative) in adjustments, tukar-masuk is just for info
+                  const totalAdjustment = adjustments.filter(a => a.type !== 'tukar-masuk').reduce((sum, a) => sum + a.amount, 0);
+                  const actualRevenue = originalRevenue + totalAdjustment;
+
+                  monthTotal += actualRevenue;
+                  adjustmentTotal += totalAdjustment;
+
+                  if (originalRevenue > 0 || adjustments.length > 0) {
+                    dailyData.push({
+                      date: dateStr,
+                      dateLabel,
+                      originalRevenue,
+                      adjustments,
+                      actualRevenue
+                    });
+                  }
+                }
+
+                return (
+                  <div className="space-y-2">
+                    {/* Summary */}
+                    <div className="bg-amber-50 p-3 rounded-lg border border-amber-200 mb-4">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-medium text-amber-700">Total Omset Bulan Ini</span>
+                        <span className="text-lg font-bold text-amber-600">{formatCurrency(monthTotal)}</span>
+                      </div>
+                      {adjustmentTotal !== 0 && (
+                        <div className="text-xs text-amber-600 mt-1">
+                          Termasuk penyesuaian tukar: {formatCurrency(adjustmentTotal)}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Daily list */}
+                    {dailyData.length > 0 ? (
+                      dailyData.reverse().map((day, idx) => {
+                        // Check if there are real adjustments (tukar-keluar, not just info)
+                        const hasRealAdjustment = day.adjustments.some(a => a.type !== 'tukar-masuk');
+                        const hasExchangeInfo = day.adjustments.some(a => a.type === 'tukar-masuk');
+
+                        // Calculate base revenue (without exchange adjustments from today)
+                        // For strikethrough display: show what it would be WITHOUT the tukar-masuk amounts
+                        const tukarMasukTotal = day.adjustments
+                          .filter(a => a.type === 'tukar-masuk')
+                          .reduce((sum, a) => sum + a.amount, 0);
+                        const baseRevenue = day.originalRevenue - tukarMasukTotal; // Revenue before exchange additions
+
+                        // Show strikethrough if there's any difference due to exchanges (keluar or masuk)
+                        const hasAnyExchangeEffect = hasRealAdjustment || (hasExchangeInfo && tukarMasukTotal !== 0);
+
+                        return (
+                          <div key={day.date} className={`p-3 rounded-lg border ${hasRealAdjustment ? 'bg-orange-50 border-orange-200' : hasExchangeInfo ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                            <div className="flex justify-between items-start">
+                              <span className="font-medium text-sm">{day.dateLabel}</span>
+                              {hasAnyExchangeEffect ? (
+                                <div className="text-right">
+                                  <div className="text-sm text-gray-400 line-through">
+                                    {formatCurrency(hasRealAdjustment ? day.originalRevenue : baseRevenue)}
+                                  </div>
+                                  <div className={`text-sm font-bold ${hasRealAdjustment ? 'text-orange-600' : 'text-green-700'}`}>
+                                    {formatCurrency(hasRealAdjustment ? day.actualRevenue : day.originalRevenue)}
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className={`font-bold text-sm ${hasExchangeInfo ? 'text-green-700' : 'text-gray-700'}`}>{formatCurrency(day.originalRevenue)}</span>
+                              )}
+                            </div>
+                            {day.adjustments.length > 0 && (
+                              <div className="mt-1.5 space-y-0.5">
+                                {day.adjustments.map((adj, i) => (
+                                  <div key={i} className={`text-[10px] flex items-center gap-0.5 leading-tight flex-wrap ${adj.type === 'tukar-masuk' ? (adj.amount > 0 ? 'text-green-600' : adj.amount < 0 ? 'text-red-500' : 'text-gray-500') : adj.amount >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                                    {adj.type === 'tukar-masuk' ? (
+                                      <>
+                                        <span>💱</span>
+                                        <span className="font-semibold">{adj.amount > 0 ? '+' : ''}{formatCurrency(adj.amount)}</span>
+                                        <span className="text-gray-500 truncate max-w-[120px]">{adj.note}</span>
+                                        {adj.dateInfo && <span className="text-purple-500 text-[9px]">· {adj.dateInfo}</span>}
+                                      </>
+                                    ) : (
+                                      <>
+                                        <span className="font-semibold">{formatCurrency(adj.amount)}</span>
+                                        <span className="text-gray-500 truncate max-w-[140px]">{adj.note}</span>
+                                        {adj.dateInfo && <span className="text-blue-500 text-[9px]">· {adj.dateInfo}</span>}
+                                      </>
+                                    )}
+                                    <span
+                                      className="text-[8px] px-1.5 py-0.5 bg-purple-100 text-purple-600 rounded cursor-pointer hover:bg-purple-200 ml-1 flex-shrink-0"
+                                      onClick={() => {
+                                        setMonthlyRevenueDialogOpen(false);
+                                        navigate('/history', { state: { highlightExchangeId: adj.exchangeId, tab: 'history' } });
+                                      }}
+                                    >
+                                      Lihat
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="text-center py-8 text-muted-foreground">
+                        Belum ada transaksi bulan ini
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+            <DialogFooter className="pt-4 border-t">
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => setMonthlyRevenueDialogOpen(false)}
+              >
+                Tutup
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </main >

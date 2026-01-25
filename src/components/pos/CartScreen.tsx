@@ -35,6 +35,8 @@ const CartScreen = () => {
   // Discount states
   const [discountPercent, setDiscountPercent] = useState<string>("");
   const [discountAmount, setDiscountAmount] = useState<number>(0);
+  const [discountNominalInput, setDiscountNominalInput] = useState<string>("");
+  const [isEditingNominal, setIsEditingNominal] = useState(false);
 
   // Hutang (Debt) states
   const [isHutangMode, setIsHutangMode] = useState(false);
@@ -64,15 +66,35 @@ const CartScreen = () => {
   // Total sama dengan subtotal (tanpa PPN)
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-  // Kalkulasi diskon
+  // Kalkulasi diskon - use discountAmount directly if editing nominal, otherwise calculate from percent
   const parsedDiscount = parseFloat(discountPercent) || 0;
-  const calculatedDiscount = Math.round((subtotal * parsedDiscount) / 100);
-  const total = subtotal - calculatedDiscount;
+  const calculatedDiscountFromPercent = Math.round((subtotal * parsedDiscount) / 100);
 
-  // Update discountAmount ketika subtotal atau discountPercent berubah
+  // Use discountAmount directly (it's set by both nominal input and percent input)
+  const effectiveDiscount = discountAmount;
+  const total = subtotal - effectiveDiscount;
+
+  // Track if discount was set via percent input (not nominal)
+  const [discountSource, setDiscountSource] = useState<'nominal' | 'percent' | null>(null);
+
+  // Update discountAmount only when percent changes AND source is percent
   React.useEffect(() => {
-    setDiscountAmount(calculatedDiscount);
-  }, [calculatedDiscount]);
+    if (discountSource === 'percent' || discountSource === null) {
+      setDiscountAmount(calculatedDiscountFromPercent);
+      if (calculatedDiscountFromPercent > 0) {
+        setDiscountNominalInput(String(calculatedDiscountFromPercent));
+      } else {
+        setDiscountNominalInput("");
+      }
+    }
+  }, [calculatedDiscountFromPercent, discountSource]);
+
+  // Auto-update amountPaid ketika total berubah dan Uang Pas sudah dipilih
+  React.useEffect(() => {
+    if (isUangPasSelected) {
+      setAmountPaid(String(Math.ceil(total)));
+    }
+  }, [total, isUangPasSelected]);
 
   const change = amountPaid ? parseFloat(amountPaid) - total : 0;
 
@@ -164,6 +186,12 @@ const CartScreen = () => {
     // Harus pilih Uang Pas dulu
     if (!isUangPasSelected) {
       setPaymentError("Klik 'Uang Pas' terlebih dahulu!");
+      return;
+    }
+    // Cek jika ada item dengan harga 0 atau quantity 0
+    const invalidItems = cart.filter(item => item.price === 0 || item.quantity === 0);
+    if (invalidItems.length > 0) {
+      setPaymentError("Ada item dengan harga atau qty 0. Hapus atau perbaiki dulu!");
       return;
     }
     if (!amountPaid || parseFloat(amountPaid) < total) {
@@ -260,74 +288,78 @@ const CartScreen = () => {
         ) : (
           <div className="divide-y divide-gray-200">
             {paginatedCart.map((item) => (
-              <div key={item.id} className="py-4">
-                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-semibold text-sm text-gray-800 break-words leading-tight">{item.name}</p>
-                      {item.sku && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700 border border-gray-300">
-                          {item.sku}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 mt-2">
-                      <span className="text-xs text-gray-500">Harga:</span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={item.price}
-                        onChange={e => {
-                          const newPrice = parseInt(e.target.value) || 0;
-                          setItemPrice(item.id, newPrice);
-                        }}
-                        className="w-24 px-2 py-1 border rounded-lg text-right text-sm focus:ring-2 focus:ring-amber-400 focus:outline-none transition"
-                      />
-                      <span className="text-xs text-gray-500">x</span>
-                      <input
-                        type="number"
-                        // FIX QTY INPUT: Menggunakan state sementara untuk 'value'
-                        value={editingQuantities[item.id] ?? item.quantity}
-                        // FIX QTY INPUT: onChange hanya mengubah state string sementara
-                        onChange={(e) => {
-                          setEditingQuantities({ ...editingQuantities, [item.id]: e.target.value });
-                        }}
-                        // FIX QTY INPUT: Logika utama dijalankan saat user selesai edit
-                        onBlur={() => handleQuantityBlur(item)}
-                        placeholder="Qty"
-                        className="w-14 px-2 py-1 border rounded-lg text-center text-sm focus:ring-2 focus:ring-amber-400 focus:outline-none transition"
-                      />
-                    </div>
+              <div key={item.id} className="py-2">
+                {/* Row 1: Name + SKU + Trash */}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
+                    <p className="font-semibold text-xs text-gray-800 break-words leading-tight">{item.name}</p>
+                    {item.sku && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600 border border-gray-200">
+                        {item.sku}
+                      </span>
+                    )}
                   </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 rounded-full text-red-500 hover:text-red-600 hover:bg-red-50 shrink-0"
+                    onClick={() => updateQuantity(item.id, -1)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
                 </div>
-                <div className="flex items-center justify-between mt-3">
-                  <p className="font-bold text-amber-600 text-lg">
+                {/* Row 2: Harga x Qty */}
+                <div className="flex items-center gap-1.5 mt-1">
+                  <span className="text-[10px] text-gray-400">Harga:</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={item.price}
+                    onChange={e => {
+                      const newPrice = parseInt(e.target.value) || 0;
+                      setItemPrice(item.id, newPrice);
+                    }}
+                    onFocus={(e) => {
+                      setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+                    }}
+                    className="w-16 px-1.5 py-0.5 border rounded text-right text-xs focus:ring-1 focus:ring-amber-400 focus:outline-none"
+                  />
+                  <span className="text-[10px] text-gray-400">x</span>
+                  <input
+                    type="number"
+                    value={editingQuantities[item.id] ?? item.quantity}
+                    onChange={(e) => {
+                      setEditingQuantities({ ...editingQuantities, [item.id]: e.target.value });
+                    }}
+                    onFocus={(e) => {
+                      setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+                    }}
+                    onBlur={() => handleQuantityBlur(item)}
+                    placeholder="Qty"
+                    className="w-10 px-1 py-0.5 border rounded text-center text-xs focus:ring-1 focus:ring-amber-400 focus:outline-none"
+                  />
+                </div>
+                {/* Row 3: Total + -/+ buttons (centered) */}
+                <div className="flex items-center mt-1.5">
+                  <p className="font-bold text-amber-600 text-sm">
                     {formatCurrency(item.price * item.quantity)}
                   </p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex-1 flex items-center justify-center gap-2">
                     <Button
                       variant="outline"
                       size="icon"
-                      className="h-8 w-8 rounded-full border-amber-400 text-amber-600 hover:bg-amber-50"
-                      onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                      className="h-7 w-7 rounded-full border-amber-300 text-amber-500 hover:bg-amber-50"
+                      onClick={() => updateQuantity(item.id, Math.max(0, item.quantity - 1))}
                     >
-                      <Minus className="h-4 w-4" />
+                      <Minus className="h-3.5 w-3.5" />
                     </Button>
                     <Button
                       variant="outline"
                       size="icon"
-                      className="h-8 w-8 rounded-full border-amber-400 text-amber-600 hover:bg-amber-50"
+                      className="h-7 w-7 rounded-full border-amber-300 text-amber-500 hover:bg-amber-50"
                       onClick={() => updateQuantity(item.id, item.quantity + 1)}
                     >
-                      <Plus className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50"
-                      onClick={() => updateQuantity(item.id, 0)}
-                    >
-                      <Trash2 className="h-4 w-4" />
+                      <Plus className="h-3.5 w-3.5" />
                     </Button>
                   </div>
                 </div>
@@ -351,16 +383,58 @@ const CartScreen = () => {
                 <span className="text-lg">🏷️</span>
                 <span className="text-sm font-semibold text-purple-700">Diskon</span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                {/* Nominal Discount Input */}
+                <div className="flex items-center bg-white rounded-lg border border-orange-300 overflow-hidden">
+                  <span className="px-2 py-2 bg-orange-100 text-orange-700 font-bold text-[10px]">Rp</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={discountNominalInput}
+                    onFocus={(e) => {
+                      setIsEditingNominal(true);
+                      setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+                    }}
+                    onBlur={() => setIsEditingNominal(false)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setDiscountNominalInput(val);
+                      setDiscountSource('nominal'); // Mark source as nominal
+                      const nominal = parseFloat(val) || 0;
+                      // Set discountAmount directly to avoid rounding issues
+                      const clampedNominal = Math.min(nominal, subtotal);
+                      setDiscountAmount(clampedNominal);
+                      if (subtotal > 0 && nominal >= 0) {
+                        const percent = (nominal / subtotal) * 100;
+                        // Max 100%
+                        if (percent > 100) {
+                          setDiscountPercent("100");
+                        } else {
+                          // Round to 1 decimal place for clean display
+                          setDiscountPercent(percent.toFixed(1).replace(/\.0$/, ''));
+                        }
+                      } else {
+                        setDiscountPercent("");
+                      }
+                    }}
+                    placeholder="0"
+                    className="w-20 px-2 py-2 text-center text-sm font-semibold focus:outline-none"
+                  />
+                </div>
+                {/* Percentage Discount Input */}
                 <div className="flex items-center bg-white rounded-lg border border-purple-300 overflow-hidden">
                   <input
                     type="number"
                     min="0"
                     max="100"
-                    step="0.5"
+                    step="0.1"
                     value={discountPercent}
+                    onFocus={(e) => {
+                      setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+                    }}
                     onChange={(e) => {
                       const val = e.target.value;
+                      setDiscountSource('percent'); // Mark source as percent
                       // Max 100%
                       if (parseFloat(val) > 100) {
                         setDiscountPercent("100");
@@ -369,15 +443,10 @@ const CartScreen = () => {
                       }
                     }}
                     placeholder="0"
-                    className="w-16 px-2 py-2 text-center text-sm font-semibold focus:outline-none"
+                    className="w-14 px-2 py-2 text-center text-sm font-semibold focus:outline-none"
                   />
                   <span className="px-2 py-2 bg-purple-100 text-purple-700 font-bold text-sm">%</span>
                 </div>
-                {discountAmount > 0 && (
-                  <span className="px-3 py-1.5 bg-red-100 text-red-600 rounded-lg text-sm font-bold">
-                    - {formatCurrency(discountAmount)}
-                  </span>
-                )}
               </div>
             </div>
 
@@ -386,7 +455,7 @@ const CartScreen = () => {
               {[3, 5, 7, 10].map((percent) => (
                 <button
                   key={percent}
-                  onClick={() => setDiscountPercent(String(percent))}
+                  onClick={() => { setDiscountSource('percent'); setDiscountPercent(String(percent)); }}
                   className={`flex-1 py-1.5 text-xs font-bold rounded-lg border transition-all ${discountPercent === String(percent)
                     ? 'bg-purple-600 text-white border-purple-600'
                     : 'bg-white text-purple-600 border-purple-300 hover:bg-purple-50'
@@ -397,7 +466,7 @@ const CartScreen = () => {
               ))}
               {discountPercent && (
                 <button
-                  onClick={() => setDiscountPercent("")}
+                  onClick={() => { setDiscountPercent(""); setDiscountAmount(0); setDiscountNominalInput(""); setDiscountSource(null); }}
                   className="px-3 py-1.5 text-xs font-bold rounded-lg bg-gray-200 text-gray-600 hover:bg-gray-300 transition-all"
                 >
                   ✕
@@ -413,50 +482,32 @@ const CartScreen = () => {
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg z-30 pb-20">
         {isCartLoaded && cart.length > 0 && (
           <div className="p-3 space-y-2">
-            {/* Baris 1: Uang Pas + Hutang + Total */}
+            {/* Baris 1: Uang Pas (kiri) + Total (tengah) + Hutang (kanan) */}
             <div className="flex items-center justify-between gap-2">
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant={isUangPasSelected ? "default" : "outline"}
-                  className={`h-10 px-4 font-semibold ${isUangPasSelected ? "bg-green-600 hover:bg-green-700 text-white" : ""}`}
-                  onClick={() => {
-                    if (isUangPasSelected) {
-                      // Unselect
-                      setIsUangPasSelected(false);
-                      setAmountPaid("");
-                    } else {
-                      // Select
-                      setIsUangPasSelected(true);
-                      setIsHutangMode(false);
-                      setAmountPaid(String(Math.ceil(total)));
-                    }
-                    setPaymentError("");
-                  }}
-                >
-                  {isUangPasSelected ? "✓ Uang Pas" : "💵 Uang Pas"}
-                </Button>
-                <Button
-                  type="button"
-                  variant={isHutangMode ? "default" : "outline"}
-                  className={`h-10 px-4 font-semibold ${isHutangMode ? "bg-red-500 hover:bg-red-600 text-white" : "border-red-200 text-red-600 hover:bg-red-50"}`}
-                  onClick={() => {
-                    if (isHutangMode) {
-                      setIsHutangMode(false);
-                    } else {
-                      setIsHutangMode(true);
-                      setIsUangPasSelected(false);
-                      setAmountPaid("");
-                      setShowHutangDialog(true);
-                    }
-                    setPaymentError("");
-                  }}
-                >
-                  <CreditCard className="h-4 w-4 mr-1" />
-                  {isHutangMode ? "✓ Hutang" : "Hutang"}
-                </Button>
-              </div>
-              <div className="flex flex-col items-end">
+              {/* Uang Pas Button - Left */}
+              <Button
+                type="button"
+                variant={isUangPasSelected ? "default" : "outline"}
+                className={`h-10 px-4 font-semibold ${isUangPasSelected ? "bg-green-600 hover:bg-green-700 text-white" : ""}`}
+                onClick={() => {
+                  if (isUangPasSelected) {
+                    // Unselect
+                    setIsUangPasSelected(false);
+                    setAmountPaid("");
+                  } else {
+                    // Select
+                    setIsUangPasSelected(true);
+                    setIsHutangMode(false);
+                    setAmountPaid(String(Math.ceil(total)));
+                  }
+                  setPaymentError("");
+                }}
+              >
+                {isUangPasSelected ? "✓ Uang Pas" : "💵 Uang Pas"}
+              </Button>
+
+              {/* Total - Center */}
+              <div className="flex flex-col items-center flex-1">
                 {discountAmount > 0 && (
                   <div className="flex items-center gap-1 text-xs">
                     <span className="text-gray-400 line-through">{formatCurrency(subtotal)}</span>
@@ -468,6 +519,27 @@ const CartScreen = () => {
                   <span className="text-xl font-bold text-amber-600">{formatCurrency(total)}</span>
                 </div>
               </div>
+
+              {/* Hutang Button - Right */}
+              <Button
+                type="button"
+                variant={isHutangMode ? "default" : "outline"}
+                className={`h-10 px-4 font-semibold ${isHutangMode ? "bg-red-500 hover:bg-red-600 text-white" : "border-red-200 text-red-600 hover:bg-red-50"}`}
+                onClick={() => {
+                  if (isHutangMode) {
+                    setIsHutangMode(false);
+                  } else {
+                    setIsHutangMode(true);
+                    setIsUangPasSelected(false);
+                    setAmountPaid("");
+                    setShowHutangDialog(true);
+                  }
+                  setPaymentError("");
+                }}
+              >
+                <CreditCard className="h-4 w-4 mr-1" />
+                {isHutangMode ? "✓ Hutang" : "Hutang"}
+              </Button>
             </div>
 
             {paymentError && (

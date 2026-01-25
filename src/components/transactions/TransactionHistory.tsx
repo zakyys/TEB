@@ -1,15 +1,16 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
+import { useLocation } from "react-router-dom";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
 import { safeGetAllTransactions, safeSaveAllTransactions, safeInitAndMigrate } from "@/lib/indexedDB";
 import { DUMMY_TRANSACTIONS, DUMMY_PRODUCTS } from "@/lib/dummyData";
-import { Search, Calendar, Printer, RotateCcw, ChevronRight, ChevronLeft, Info, X, ArrowRight, Banknote, RefreshCw, ShoppingCart, Pencil, Trash2, Minus, Plus, ScanBarcode } from "lucide-react";
+import { Search, Calendar, Printer, RotateCcw, ChevronRight, ChevronLeft, Info, X, ArrowRight, Banknote, RefreshCw, ShoppingCart, Pencil, Trash2, Minus, Plus, ScanBarcode, Tag } from "lucide-react";
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerClose } from "@/components/ui/drawer";
 import { Separator } from "@/components/ui/separator";
 import * as XLSX from "xlsx";
@@ -18,7 +19,7 @@ import "jspdf-autotable";
 import { saveAs } from "file-saver";
 import { useToast } from "@/components/ui/use-toast";
 import { getDailyStatsInRange } from "@/lib/visitors";
-import { getExchanges, ExchangeRecord, addRefund, getRefunds, RefundRecord, addExchange } from "@/lib/exchange";
+import { getExchanges, ExchangeRecord, addRefund, getRefunds, RefundRecord, addExchange, deleteExchange } from "@/lib/exchange";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ProfileData } from "@/types/pos";
 
@@ -40,6 +41,8 @@ interface Transaction {
   total: number;
   status: "completed" | "pending" | "cancelled" | "refunded";
   items: TransactionItem[];
+  discountPercent?: string;
+  discountAmount?: number;
 }
 
 const BarcodeScanner = ({ onDetected, onStart }: { onDetected: (code: string) => void, onStart?: () => void }) => {
@@ -135,6 +138,14 @@ const TransactionHistory: React.FC = () => {
   // State for editing quantity
   const [editingItem, setEditingItem] = useState<{ transactionId: string; itemIndex: number; currentQty: number } | null>(null);
 
+  // State for exchange delete confirmation
+  const [exchangeToDelete, setExchangeToDelete] = useState<ExchangeRecord | null>(null);
+
+  // State for highlighted exchange (from navigation)
+  const [highlightedExchangeId, setHighlightedExchangeId] = useState<string | null>(null);
+  const location = useLocation();
+  const exchangeCardRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
+
   // Pagination state for "Item Terjual" tab
   const [itemTerjualPage, setItemTerjualPage] = useState(1);
   // Pagination state for "Transaksi" tab
@@ -190,6 +201,35 @@ const TransactionHistory: React.FC = () => {
     }
   }, [activeTab]);
 
+  // Handle navigation state for highlighting exchange
+  useEffect(() => {
+    const state = location.state as { highlightExchangeId?: string; tab?: string } | null;
+    if (state?.highlightExchangeId) {
+      // Switch to history tab
+      if (state.tab === 'history') {
+        setActiveTab('history');
+      }
+      // Set highlighted exchange
+      setHighlightedExchangeId(state.highlightExchangeId);
+
+      // Scroll to the card after a short delay (wait for render)
+      setTimeout(() => {
+        const cardEl = exchangeCardRefs.current[state.highlightExchangeId!];
+        if (cardEl) {
+          cardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 300);
+
+      // Remove highlight after 3 seconds
+      setTimeout(() => {
+        setHighlightedExchangeId(null);
+      }, 3000);
+
+      // Clear location state to prevent re-highlighting on refresh
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
+
   const matchesDate = (iso: string) => {
     const d = iso.split("T")[0];
     if (dateRange.start && d < dateRange.start) return false;
@@ -216,7 +256,7 @@ const TransactionHistory: React.FC = () => {
       );
 
       return hasMatchingItem;
-    });
+    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [transactions, searchQuery, dateRange]);
 
   // Date-only filtered transactions (no search), for item-level filtering
@@ -579,7 +619,7 @@ const TransactionHistory: React.FC = () => {
   };
 
   // Process the exchange
-  const processExchange = () => {
+  const processExchange = async () => {
     if (!selectedTransaction || !exchangeItemToReturn || !selectedNewProduct) return;
 
     const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
@@ -636,8 +676,9 @@ const TransactionHistory: React.FC = () => {
     localStorage.setItem(LS_KEYS.PRODUCTS, JSON.stringify(updatedProducts));
     window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
 
-    // Update transaction: handle partial or full exchange
-    const updated = transactions.map(t => {
+    // === NEW LOGIC: Proper Retail Accounting ===
+    // 1. Update ORIGINAL transaction: ONLY remove/reduce old item (reduces omset on original date)
+    const updatedOriginal = transactions.map(t => {
       if (t.id !== trxId) return t;
 
       let newItems = [...t.items];
@@ -651,40 +692,48 @@ const TransactionHistory: React.FC = () => {
         newItems[oldItemIndex] = { ...oldItem, quantity: remainingQty };
       }
 
-      // Add new item with custom price if set
-      // Check if same product already exists in transaction
-      const existingNewItemIndex = newItems.findIndex(it => it.sku === selectedNewProduct.sku);
-      if (existingNewItemIndex >= 0) {
-        // Add to existing item qty
-        newItems[existingNewItemIndex] = {
-          ...newItems[existingNewItemIndex],
-          quantity: newItems[existingNewItemIndex].quantity + newQty
-        };
-      } else {
-        // Add as new item
-        newItems.push({
-          name: selectedNewProduct.name,
-          sku: selectedNewProduct.sku,
-          price: actualPrice,
-          quantity: newQty,
-          type: oldItem.type
-        });
+      // If no items left, mark as refunded
+      if (newItems.length === 0) {
+        return { ...t, items: newItems, total: 0, status: 'refunded' as const };
       }
 
       const totalAmount = newItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
       return { ...t, items: newItems, total: totalAmount };
     });
-    setTransactions(updated);
-    safeSaveAllTransactions(updated);
 
-    // Show toast
+    // 2. Create NEW transaction ONLY if there's a positive price difference (selisih > 0)
+    // This represents the ACTUAL CASH that came in today
+    let finalTransactions = [...updatedOriginal];
+
+    if (priceDiff > 0) {
+      // Customer pays extra - record as adjustment (NOT as regular sale)
+      // Use ADJ- prefix and "Tukar Barang" customer so it gets filtered from PENJUALAN HARI INI
+      const newTransaction: Transaction = {
+        id: `ADJ-${Date.now().toString().substring(6)}`,
+        date: new Date().toISOString(), // TODAY's date
+        customer: 'Tukar Barang', // Mark as exchange
+        total: priceDiff, // ONLY the selisih (cash received today)
+        status: 'completed',
+        items: [{
+          name: `Selisih Tukar: ${oldItem.name} → ${selectedNewProduct.name}`,
+          sku: `EX-${Date.now().toString().substring(8)}`, // Exchange reference, not product SKU
+          price: priceDiff,
+          quantity: 1,
+          type: 'product' as const
+        }]
+      };
+      finalTransactions = [...updatedOriginal, newTransaction];
+    }
+    // Note: If priceDiff <= 0, no extra cash came in (customer gets refund or even exchange)
+    // We don't create a transaction for negative selisih (that would be handled separately)
+
+    setTransactions(finalTransactions);
+    await safeSaveAllTransactions(finalTransactions);
+
+    // Show toast with clear breakdown
     toast({
       title: "Tukar berhasil!",
-      description: `${qtyToReturn} pcs ditukar dengan ${newQty} pcs. ${priceDiff > 0
-        ? `Pelanggan tambah bayar ${formatCurrency(priceDiff)}`
-        : priceDiff < 0
-          ? `Kembalian ${formatCurrency(Math.abs(priceDiff))}`
-          : "Tidak ada selisih harga"}`,
+      description: `Omset ${new Date(selectedTransaction.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}: -${formatCurrency(oldTotal)} | Kas hari ini: ${priceDiff >= 0 ? '+' : ''}${formatCurrency(priceDiff)}`,
     });
 
     // Reset and close all dialogs
@@ -767,6 +816,89 @@ const TransactionHistory: React.FC = () => {
     setSearchQuery(code);
     setItemTerjualPage(1);
   }, []);
+
+  // Undo/Cancel exchange - revert stock and transactions (NEW LOGIC)
+  const undoExchange = async (exchange: ExchangeRecord) => {
+    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
+
+    // 1. Revert stock: +newItem qty (barang baru dikembalikan ke stok), -originalItem qty (barang lama diambil kembali)
+    let updatedProducts = products.map(p => {
+      if (p.sku === exchange.newItem.sku && p.stock !== undefined) {
+        return { ...p, stock: p.stock + exchange.newItem.quantity };
+      }
+      if (p.sku === exchange.originalItem.sku && p.stock !== undefined) {
+        return { ...p, stock: p.stock - exchange.originalItem.quantity };
+      }
+      return p;
+    });
+    saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+    window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
+
+    // 2. Find and DELETE the new transaction (created on exchange date for new item)
+    // The new transaction should have the new item with matching qty, created around exchange date
+    const exchangeDate = new Date(exchange.date).toISOString().split('T')[0];
+
+    let updatedTransactions = transactions.filter(t => {
+      // Check if this is the exchange transaction (created on exchange date, has only the new item)
+      const txDate = t.date.split('T')[0];
+      if (txDate !== exchangeDate) return true; // Keep transactions from other dates
+
+      // Check if this transaction only has the new item with exact qty
+      if (t.items.length === 1 &&
+        t.items[0].sku === exchange.newItem.sku &&
+        t.items[0].quantity === exchange.newItem.quantity) {
+        // This is the exchange transaction, remove it
+        return false;
+      }
+      return true;
+    });
+
+    // 3. Restore original item qty in the ORIGINAL transaction
+    if (exchange.originalTransactionId) {
+      updatedTransactions = updatedTransactions.map(t => {
+        if (t.id !== exchange.originalTransactionId) return t;
+
+        let newItems = [...t.items];
+
+        // Add back originalItem qty
+        const oldItemIndex = newItems.findIndex(it => it.sku === exchange.originalItem.sku);
+        if (oldItemIndex >= 0) {
+          newItems[oldItemIndex] = {
+            ...newItems[oldItemIndex],
+            quantity: newItems[oldItemIndex].quantity + exchange.originalItem.quantity
+          };
+        } else {
+          // Item was fully removed, add it back
+          newItems.push({
+            name: exchange.originalItem.name,
+            sku: exchange.originalItem.sku,
+            price: exchange.originalItem.price,
+            quantity: exchange.originalItem.quantity,
+            type: 'product' as const
+          });
+        }
+
+        const totalAmount = newItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
+        return { ...t, items: newItems, total: totalAmount, status: 'completed' as const };
+      });
+    }
+
+    setTransactions(updatedTransactions);
+    await safeSaveAllTransactions(updatedTransactions);
+
+    // 4. Delete exchange record
+    deleteExchange(exchange.id);
+    setExchangeHistory(getExchanges());
+
+    // 5. Show toast
+    toast({
+      title: "Tukar Dibatalkan",
+      description: `Omset dikembalikan ke semula. ${exchange.originalItem.name} (+${exchange.originalItem.quantity}), ${exchange.newItem.name} (stok +${exchange.newItem.quantity})`,
+    });
+
+    setExchangeToDelete(null);
+  };
+
 
   return (
     <div className="bg-background h-screen flex flex-col overflow-hidden">
@@ -1245,8 +1377,14 @@ const TransactionHistory: React.FC = () => {
                           {paginatedActivity.map((item, idx) => {
                             if (item.type === 'exchange') {
                               const ex = item.data as ExchangeRecord;
+                              const isHighlighted = highlightedExchangeId === ex.id;
                               return (
-                                <Card key={ex.id} className="overflow-hidden border-l-4 border-l-purple-500 shadow-sm">
+                                <Card
+                                  key={ex.id}
+                                  ref={(el) => { exchangeCardRefs.current[ex.id] = el; }}
+                                  className={`overflow-hidden border-l-4 border-l-purple-500 shadow-sm transition-all duration-300 ${isHighlighted ? 'ring-4 ring-purple-400 ring-opacity-75 bg-purple-50' : ''}`}
+                                  style={isHighlighted ? { animation: 'slow-pulse 2s ease-in-out infinite' } : {}}
+                                >
                                   <CardContent className="p-3 sm:p-4">
                                     <div className="flex justify-between items-start mb-3">
                                       <div className="text-xs text-muted-foreground font-medium flex items-center gap-1">
@@ -1259,21 +1397,45 @@ const TransactionHistory: React.FC = () => {
 
                                     <div className="grid grid-cols-[1fr,auto,1fr] items-center gap-2 bg-muted/30 p-2 rounded-lg border border-dashed">
                                       <div className="space-y-0.5">
-                                        <div className="text-[9px] text-red-600 font-bold uppercase">Keluar</div>
+                                        <div className="text-[9px] text-red-600 font-bold uppercase">Dikembalikan</div>
                                         <div className="text-xs font-semibold leading-tight line-clamp-2">{ex.originalItem.name}</div>
                                         <div className="text-[10px] text-muted-foreground">{ex.originalItem.quantity} pcs</div>
+                                        {/* Tanggal Beli */}
+                                        <div className="text-[9px] text-blue-600 mt-1 flex items-center gap-1">
+                                          {(() => {
+                                            if (!ex.originalPurchaseDate) return null;
+                                            const purchaseDate = new Date(ex.originalPurchaseDate).toISOString().split('T')[0];
+                                            const exchangeDate = new Date(ex.date).toISOString().split('T')[0];
+                                            if (purchaseDate === exchangeDate) {
+                                              return <><Calendar className="h-3 w-3" /> Tanggal Beli: Di hari yg sama</>;
+                                            }
+                                            return <><Calendar className="h-3 w-3" /> Tanggal Beli: {new Date(ex.originalPurchaseDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</>;
+                                          })()}
+                                        </div>
                                       </div>
                                       <ArrowRight className="h-3.5 w-3.5 text-purple-500" />
                                       <div className="space-y-0.5 text-right">
-                                        <div className="text-[9px] text-green-600 font-bold uppercase">Masuk</div>
+                                        <div className="text-[9px] text-green-600 font-bold uppercase">Ditukar</div>
                                         <div className="text-xs font-semibold leading-tight line-clamp-2">{ex.newItem.name}</div>
                                         <div className="text-[10px] text-muted-foreground">{ex.newItem.quantity} pcs</div>
                                       </div>
                                     </div>
 
                                     <div className="mt-3 flex justify-between items-end">
-                                      <div className="text-[9px] text-muted-foreground">
-                                        Ref: {ex.originalTransactionId || '-'}
+                                      <div className="flex items-center gap-2">
+                                        <div className="text-[9px] text-muted-foreground">
+                                          Ref: {ex.originalTransactionId || '-'}
+                                        </div>
+                                        {/* Cancel exchange button - opens dialog */}
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          className="h-6 px-2 text-[10px] text-red-500 hover:text-red-700 hover:bg-red-50"
+                                          onClick={() => setExchangeToDelete(ex)}
+                                        >
+                                          <Trash2 className="h-3 w-3 mr-1" />
+                                          Batalkan
+                                        </Button>
                                       </div>
                                       <div className="text-right">
                                         <div className="text-[9px] text-muted-foreground uppercase font-bold">Selisih</div>
@@ -1466,16 +1628,44 @@ const TransactionHistory: React.FC = () => {
                     });
                   })()}
                 </div>
-                <Separator />
-                <div className="flex justify-between items-center">
-                  <p className="font-bold">{(selectedItemIndex !== null && selectedItemIndex >= 0 && selectedItemIndex < selectedTransaction.items.length) ? 'Total Item' : 'Total'}</p>
-                  <p className="font-bold text-amber-600">{
-                    formatCurrency(
-                      (selectedItemIndex !== null && selectedItemIndex >= 0 && selectedItemIndex < selectedTransaction.items.length)
-                        ? (selectedTransaction.items[selectedItemIndex].price * selectedTransaction.items[selectedItemIndex].quantity)
-                        : selectedTransaction.total
-                    )
-                  }</p>
+                <Separator className="my-2" />
+                <div className="space-y-1.5 bg-gray-50 dark:bg-gray-800/40 p-3 rounded-xl border border-gray-100 dark:border-gray-800">
+                  {(() => {
+                    const isSingleItem = selectedItemIndex !== null && selectedItemIndex >= 0 && selectedItemIndex < selectedTransaction.items.length;
+                    const subtotal = isSingleItem
+                      ? (selectedTransaction.items[selectedItemIndex].price * selectedTransaction.items[selectedItemIndex].quantity)
+                      : selectedTransaction.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+                    const hasDiscount = !isSingleItem && (selectedTransaction.discountAmount || 0) > 0;
+
+                    return (
+                      <>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-muted-foreground">{isSingleItem ? 'Subtotal Item' : 'Subtotal'}</span>
+                          <span className={hasDiscount ? "line-through text-muted-foreground" : "font-semibold"}>
+                            {formatCurrency(subtotal)}
+                          </span>
+                        </div>
+
+                        {hasDiscount && (
+                          <div className="flex justify-between items-center text-sm py-1 px-2 bg-rose-50 dark:bg-rose-950/30 rounded-lg text-rose-600 dark:text-rose-400 font-medium border border-rose-100 dark:border-rose-900/50">
+                            <div className="flex items-center gap-1.5">
+                              <Tag className="h-3.5 w-3.5" />
+                              <span>Diskon ({selectedTransaction.discountPercent}%)</span>
+                            </div>
+                            <span>-{formatCurrency(selectedTransaction.discountAmount || 0)}</span>
+                          </div>
+                        )}
+
+                        <div className="flex justify-between items-center pt-1 mt-1 border-t border-gray-200 dark:border-gray-700">
+                          <span className="font-bold text-gray-900 dark:text-gray-100">{isSingleItem ? 'Total Item' : 'Total Akhir'}</span>
+                          <span className="text-xl font-black text-amber-600 tracking-tight">
+                            {formatCurrency(isSingleItem ? subtotal : selectedTransaction.total)}
+                          </span>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
               <div className="flex gap-2 pt-2">
@@ -1656,8 +1846,8 @@ const TransactionHistory: React.FC = () => {
 
       {/* Product Picker Dialog - Full Screen */}
       <Dialog open={showProductPicker} onOpenChange={setShowProductPicker}>
-        <DialogContent className="w-full max-w-full h-[100vh] flex flex-col p-0 rounded-none">
-          <DialogHeader className="p-4 pb-2 border-b">
+        <DialogContent className="w-full max-w-full h-[100dvh] flex flex-col p-0 rounded-none overflow-hidden">
+          <DialogHeader className="p-4 pb-2 border-b shrink-0">
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setShowProductPicker(false)}
@@ -1673,7 +1863,7 @@ const TransactionHistory: React.FC = () => {
               </div>
             </div>
           </DialogHeader>
-          <div className="p-4 pb-2">
+          <div className="p-4 pb-2 shrink-0">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
@@ -1699,7 +1889,7 @@ const TransactionHistory: React.FC = () => {
               <span>Halaman {productPickerPage} dari {totalPickerPages || 1}</span>
             </div>
           </div>
-          <ScrollArea className="flex-1 px-4 pb-16">
+          <ScrollArea className="flex-1 min-h-0 px-4 pt-2 pb-24">
             <div className="space-y-2">
               {paginatedPickerProducts.map((product) => {
                 const isSelected = selectedNewProduct?.id === product.id;
@@ -1968,6 +2158,35 @@ const TransactionHistory: React.FC = () => {
               </div>
             );
           })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* Cancel Exchange Confirmation Dialog */}
+      <Dialog open={!!exchangeToDelete} onOpenChange={(open) => !open && setExchangeToDelete(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader className="text-center">
+            <DialogTitle className="text-xl">Batalkan Tukar?</DialogTitle>
+            <DialogDescription className="text-center text-muted-foreground">
+              Tukar akan dibatalkan dan stok akan dikembalikan seperti semula
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-3 sm:justify-center mt-4">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setExchangeToDelete(null)}
+            >
+              Batal
+            </Button>
+            <Button
+              variant="destructive"
+              className="flex-1 gap-2"
+              onClick={() => exchangeToDelete && undoExchange(exchangeToDelete)}
+            >
+              <Trash2 className="h-4 w-4" />
+              Ya, Batalkan
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div >

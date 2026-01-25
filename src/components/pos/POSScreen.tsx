@@ -592,6 +592,9 @@ const POSScreen = () => {
                                 e.stopPropagation();
                                 (e.target as HTMLInputElement).select();
                               }}
+                              onFocus={(e) => {
+                                setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+                              }}
                               onChange={(e) => {
                                 e.stopPropagation();
                                 const val = e.target.value.replace(/\D/g, "");
@@ -633,6 +636,9 @@ const POSScreen = () => {
                               placeholder="0"
                               value={(inCart?.price ?? item.price).toLocaleString('id-ID')}
                               onClick={(e) => e.stopPropagation()}
+                              onFocus={(e) => {
+                                setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+                              }}
                               onChange={(e) => {
                                 // Remove dots/commas and parse as number
                                 const cleanValue = e.target.value.replace(/\./g, '').replace(/,/g, '');
