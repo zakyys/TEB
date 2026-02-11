@@ -39,7 +39,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 import { getNotes, getActiveNotes, getActiveNotesCount, addNote, completeNote, deleteNote, updateNote, Note, getActiveHutang, getTotalHutangAmount, clearNotes, clearHutang } from "@/lib/notes";
 
 interface Transaction {
@@ -118,8 +118,6 @@ const Dashboard = () => {
   const [confirmCompleteHutangId, setConfirmCompleteHutangId] = useState<string | null>(null);
   const [confirmDeleteHutangId, setConfirmDeleteHutangId] = useState<string | null>(null);
 
-  // Monthly revenue detail dialog
-  const [monthlyRevenueDialogOpen, setMonthlyRevenueDialogOpen] = useState(false);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -275,10 +273,29 @@ const Dashboard = () => {
     setAvgVisitorMonth(avg);
   }, [transactions]);
 
-  // Load notes count
+  // Auto-complete old notes (catatan & belanja) on app load
+  // Hutang tetap pending sampai dilunasi manual
   useEffect(() => {
-    const count = getActiveNotesCount();
-    setActiveNotesCount(count);
+    const todayStr = new Date().toISOString().split('T')[0];
+    const allNotes = getNotes();
+    let changed = false;
+    allNotes.forEach((n) => {
+      // Skip hutang - harus dilunasi manual
+      if (n.type === 'hutang') return;
+      // Skip yang sudah completed
+      if (n.completed) return;
+      // Jika catatan dari kemarin atau lebih lama, auto-complete
+      const creationDate = n.date.split('T')[0];
+      if (creationDate < todayStr) {
+        completeNote(n.id);
+        changed = true;
+      }
+    });
+    if (changed) {
+      // Refresh notes list setelah auto-complete
+      setNotesList(getNotes());
+    }
+    setActiveNotesCount(getActiveNotesCount());
   }, [transactions]);
 
   // Refresh notes list
@@ -471,13 +488,39 @@ const Dashboard = () => {
   // These items are already recorded in "LIST TUKAR BARANG" table
   const allSoldItemsToday = todayTransactions
     .filter(t => !t.id.startsWith('ADJ-') && t.customer !== 'Tukar Barang')
-    .flatMap(t => t.items.map(item => ({
-      sku: item.sku || '-',
-      name: item.name,
-      quantity: item.quantity,
-      price: item.price,
-      total: item.quantity * item.price,
-    })));
+    .flatMap(t => {
+      // Cek apakah transaksi ini adalah hutang yang masih belum lunas
+      let associatedNote = getNotes().find((n: any) => n.transactionId === t.id);
+
+      // Fallback: Cari lewat Nama & Jumlah (Untuk transaksi lama sebelum ada ID)
+      if (!associatedNote && t.paymentMethod === 'hutang') {
+        const notes = getNotes();
+        associatedNote = notes.find((n: any) =>
+          n.type === 'hutang' &&
+          // Cek kecocokan nama ATAU jika di transaksi masih tercatat "Pelanggan Umum"
+          (n.customerName === t.customer || t.customer === 'Pelanggan Umum' || !t.customer) &&
+          Math.abs((n.amount || 0) - t.total) < 1 &&
+          n.date.split('T')[0] === t.date.split('T')[0]
+        );
+      }
+
+      // Deteksi hutang dengan cara yang lebih kuat
+      const isHutangMethod = t.paymentMethod === 'hutang' || (t as any).isHutang === true;
+      const hasHutangItems = t.items.some((item: any) => item.isHutang === true);
+      const isStillHutang = (isHutangMethod || hasHutangItems) && (!associatedNote || !associatedNote.completed);
+
+      return t.items
+        .filter(item => !(item as any).sameDayRefunded && !(item as any).refunded)
+        .map(item => ({
+          sku: item.sku || '-',
+          name: item.name,
+          quantity: item.quantity,
+          price: item.price,
+          total: item.quantity * item.price,
+          isHutang: isStillHutang,
+          transactionId: t.id
+        }));
+    });
 
   // Calculate total discount from today's transactions
   const todayDiscountInfo = (() => {
@@ -677,9 +720,10 @@ const Dashboard = () => {
         items: itemsToSend.map(item => ({
           kode: item.sku,
           quantity: item.quantity,
-          price: item.price, // Angka biasa untuk kolom Harga (10000)
-          total: item.total, // Raw number for calculations
-          totalFormatted: item.total.toLocaleString('id-ID') // Format dengan pemisah ribuan untuk kolom Total (10.000)
+          price: item.price,
+          total: item.total,
+          totalFormatted: item.total.toLocaleString('id-ID'),
+          isHutang: item.isHutang // Kirim status hutang ke GAS
         })),
         refunds: refundsToday.map(r => {
           let pDate = r.originalPurchaseDate;
@@ -695,13 +739,13 @@ const Dashboard = () => {
           }
 
           return {
+            date: new Date(r.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
             kode: r.item.sku,
+            nama: r.item.name,
             quantity: r.item.quantity,
             price: r.item.price,
             total: r.total,
-            qtyBaru: 0,
             purchaseDate: displayPDate,
-            selisih: r.total,
             jenis: 'REFUND'
           };
         }),
@@ -726,19 +770,25 @@ const Dashboard = () => {
           hasExchange: exchangesToday.length > 0
         },
         notes: getNotes().filter((n: any) => {
-          // Exclude hutang type - handled separately
-          if (n.type === 'hutang') return false;
-
           const creationDate = n.date.split('T')[0];
+          const todayStr = new Date().toISOString().split('T')[0];
 
-          // Catatan & Belanja: HANYA dikirim jika dibuat hari ini (1 hari saja)
-          // Berbeda dengan hutang yang persist sampai dilunasi
+          // Jika jenisnya hutang, tampilkan jika baru dibuat hari ini ATAU belum lunas
+          if (n.type === 'hutang') {
+            const completionDate = n.completedAt ? n.completedAt.split('T')[0] : null;
+            return (creationDate === todayStr) || (completionDate === todayStr) || (!n.completed);
+          }
+
+          // Catatan & Belanja: HANYA dikirim jika dibuat hari ini
           return creationDate === todayStr;
         }).map((n: any) => ({
           date: new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
           type: n.type,
+          customerName: n.customerName || '-',
           content: n.content,
-          amount: n.amount || 0
+          amount: n.amount || 0,
+          completed: n.completed || false,
+          completedAt: n.completedAt ? new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : null
         })),
         // Hutang (Piutang) - terpisah dari notes
         hutang: getNotes().filter((n: any) => {
@@ -896,19 +946,17 @@ const Dashboard = () => {
 
       // Collect Monthly Exchanges/Refunds
       const allExchangesMonthly = getExchanges();
+      const allRefundsMonthly = getRefunds(); // NEW: Collect Refunds too
       const startOfMonthStr = startOfMonth + 'T00:00:00.000Z';
 
-      const monthlyExchanges = allExchangesMonthly.filter((e: any) => {
+      // 1. Process Exchanges as Refunds (since user wants to focus on Refund)
+      const monthlyExchangesFormatted = allExchangesMonthly.filter((e: any) => {
         return e.date >= startOfMonthStr;
       }).map((e: any) => {
-        // Fallback Logic: If originalPurchaseDate is missing, try to find it from transaction history
         let purchaseDate = e.originalPurchaseDate;
-
         if (!purchaseDate && e.originalTransactionId) {
           const originalTrx = transactions.find((t: any) => t.id === e.originalTransactionId);
-          if (originalTrx) {
-            purchaseDate = originalTrx.date;
-          }
+          if (originalTrx) purchaseDate = originalTrx.date;
         }
 
         let displayTglBeli = '-';
@@ -920,15 +968,45 @@ const Dashboard = () => {
         return {
           date: new Date(e.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
           tglBeli: displayTglBeli,
-          barangLama: e.originalItem.name || e.originalItem.sku,
-          qtyLama: e.originalItem.quantity,
-          hargaLama: e.originalItem?.price || 0,
-          barangBaru: e.newItem.name || e.newItem.sku,
-          qtyBaru: e.newItem.quantity,
-          hargaBaru: e.newItem?.price || 0,
-          selisih: e.priceDifference
+          kode: e.originalItem?.sku || e.originalItem?.kode || "-",
+          nama: e.originalItem?.name || e.originalItem?.nama || "-",
+          quantity: e.originalItem?.quantity || 1,
+          price: e.originalItem?.price || 0,
+          totalRefund: e.priceDifference || 0, // Using difference for exchange
+          type: "EXCHANGE"
         };
       });
+
+      // 2. Process Actual Refunds
+      const monthlyRefundsFormatted = allRefundsMonthly.filter((r: any) => {
+        return r.date >= startOfMonthStr;
+      }).map((r: any) => {
+        let pDate = r.purchaseDate || r.originalPurchaseDate;
+        if (!pDate && r.transactionId) {
+          const originalTrx = transactions.find((t: any) => t.id === r.transactionId);
+          if (originalTrx) pDate = originalTrx.date;
+        }
+
+        let displayTglBeli = '-';
+        if (pDate) {
+          const isSameDay = r.date.split('T')[0] === pDate.split('T')[0];
+          displayTglBeli = isSameDay ? "Di hari yg sama" : new Date(pDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '');
+        }
+
+        return {
+          date: new Date(r.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
+          tglBeli: displayTglBeli,
+          kode: r.item?.sku || r.kode || "-",
+          nama: r.item?.name || r.nama || "-",
+          quantity: r.item?.quantity || r.quantity || 1,
+          price: r.item?.price || r.price || 0,
+          totalRefund: r.total || (r.item?.price * (r.item?.quantity || 1)) || 0,
+          type: "REFUND"
+        };
+      });
+
+      // Combine both into one list for the "LIST REFUND BARANG" section
+      const combinedMonthlyRefunds = [...monthlyRefundsFormatted, ...monthlyExchangesFormatted];
 
       // NOTE: Refunds logic can be added here similarly if stored separately in 'bengkel_refunds'
       // For now we focus on exchanges as requested.
@@ -950,18 +1028,21 @@ const Dashboard = () => {
           })),
           dailyVisitors: dailyVisitors,
           allLostList: allLostList,
-          monthlyExchanges: monthlyExchanges, // NEW: Exchange Data
+          monthlyRefunds: combinedMonthlyRefunds, // NEW: Standardized Refund Data
+          monthlyExchanges: monthlyExchangesFormatted, // Keep for backward compatibility if needed
           monthlyNotes: getNotes().filter((n: any) => {
-            // Exclude hutang type - only catatan & belanja for monthly recap
-            if (n.type === 'hutang') return false;
-            // Filter hanya catatan yang dibuat di bulan ini
+            // Filter catatan yang dibuat di bulan ini ATAU hutang yang masih pending
             const noteDate = n.date.split('T')[0];
+            if (n.type === 'hutang' && !n.completed) return true;
             return noteDate >= startOfMonth;
           }).map((n: any) => ({
             date: new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
             type: n.type,
+            customerName: n.customerName || '-',
             content: n.content,
-            amount: n.amount || 0
+            amount: n.amount || 0,
+            completed: n.completed || false,
+            completedAt: n.completedAt ? new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : null
           })),
           telegramBotToken: currentConfig.telegramBotToken,
           telegramChatId: currentConfig.telegramChatId,
@@ -1017,76 +1098,240 @@ const Dashboard = () => {
 
       try {
         // ═══════════════════════════════════════════
-        // FILE 1: Penjualan Harian (XLSX)
+        // FILE: Laporan Harian (XLSX) - Format sama seperti Google Sheet (tanpa icon)
         // ═══════════════════════════════════════════
-        const dailySalesData: any[] = itemsToSend.map((item, idx) => ({
-          'No': idx + 1,
-          'Kode': item.sku,
-          'Qty': item.quantity,
-          'Harga': item.price, // Angka biasa tanpa pemisah ribuan (10000)
-          'Total': item.total.toLocaleString('id-ID') // Format dengan pemisah ribuan (10.000)
-        }));
+        const wb = XLSX.utils.book_new();
 
-        // Add total row
-        dailySalesData.push({
-          'No': '',
-          'Kode': '',
-          'Qty': '',
-          'Harga': 'TOTAL:',
-          'Total': totalPenjualan.toLocaleString('id-ID') // Format dengan pemisah ribuan (10.000)
+        // --- SHEET 1: PENJUALAN ---
+        const salesRows: any[][] = [];
+        // Header info
+        salesRows.push([tanggalHariIni]);
+        salesRows.push(['Terakhir Update: ' + now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0') + ' WIB']);
+        salesRows.push([]); // spacer
+        // Data tamu summary
+        salesRows.push(['TAMU HARI INI']);
+        salesRows.push(['< 12', '> 12', 'Total', 'Lost']);
+        salesRows.push([visitorBefore12, visitorAfter12, visitorBefore12 + visitorAfter12, visitorLostToday]);
+        // Lost list
+        if (lostDescriptions.length > 0) {
+          salesRows.push(['DAFTAR LOST:']);
+          lostDescriptions.forEach((desc, idx) => {
+            salesRows.push(['  ' + (idx + 1) + '. ' + desc]);
+          });
+        }
+        salesRows.push([]); // spacer
+        // Penjualan header
+        salesRows.push(['PENJUALAN HARI INI']);
+        salesRows.push(['KODE', 'Qty', 'Harga', 'Total']);
+        // Penjualan data
+        let totalSalesXlsx = 0;
+        let totalHutangBaruXlsx = 0;
+        itemsToSend.forEach(item => {
+          // Tandai dengan teks (HUTANG) jika belum dibayar
+          const skuDisplay = item.isHutang ? `${item.sku || '-'} (HUTANG)` : (item.sku || '-');
+          salesRows.push([skuDisplay, item.quantity, item.price, item.total]);
+          totalSalesXlsx += item.total;
+          if (item.isHutang) totalHutangBaruXlsx += item.total;
         });
 
-        const ws1 = XLSX.utils.json_to_sheet(dailySalesData);
-        const wb1 = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb1, ws1, "Penjualan");
-        const xlsxBuffer1 = XLSX.write(wb1, { type: 'array', bookType: 'xlsx' });
-        const xlsxBlob1 = new Blob([xlsxBuffer1], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        // Summary rows data
+        const totalRefundXlsx = refundsToday.reduce((sum, r) => sum + (r.item.quantity * r.item.price), 0);
+        const totalDiscountXlsx = todayDiscountInfo.totalAmount;
+        const todayStr = new Date().toISOString().split('T')[0];
+        const todayNotes = getNotes().filter((n: any) => {
+          const creationDate = n.date.split('T')[0];
+          const completionDate = n.completedAt ? n.completedAt.split('T')[0] : null;
+          return creationDate === todayStr || completionDate === todayStr;
+        });
+
+        const totalBelanjaKasir = todayNotes.reduce((sum, n: any) => sum + (n.type === 'belanja' ? (n.amount || 0) : 0), 0);
+
+        // Pelunasan Hutang: HANYA hitung jika hutangnya dari HARI SEBELUMNYA
+        // Ini mencegah uang Si Boy (yang hutang & lunas hari ini) dihitung dua kali
+        const totalPelunasanHutangXlsx = todayNotes.reduce((sum, n: any) => {
+          const isPelunasan = n.type === 'hutang' && n.completed && n.completedAt?.split('T')[0] === todayStr;
+          const isFromPreviousDay = n.date.split('T')[0] < todayStr;
+          return sum + (isPelunasan && isFromPreviousDay ? (n.amount || 0) : 0);
+        }, 0);
+
+        // KAS HARI INI = Penjualan - Diskon - Belanja - HutangBaru + PelunasanHutang - Refund
+        const kasHariIni = totalSalesXlsx - totalDiscountXlsx - totalBelanjaKasir - totalHutangBaruXlsx + totalPelunasanHutangXlsx - totalRefundXlsx;
+
+        salesRows.push(['', '', 'TOTAL :', totalSalesXlsx]);
+
+        if (totalDiscountXlsx > 0) {
+          salesRows.push(['', '', 'TOTAL DISKON :', -totalDiscountXlsx]);
+        }
+        if (totalBelanjaKasir > 0) {
+          salesRows.push(['', '', 'BELANJA KASIR :', -totalBelanjaKasir]);
+        }
+        if (totalHutangBaruXlsx > 0) {
+          salesRows.push(['', '', 'HUTANG HARI INI :', -totalHutangBaruXlsx]);
+        }
+        if (totalPelunasanHutangXlsx > 0) {
+          salesRows.push(['', '', 'PELUNASAN HUTANG :', totalPelunasanHutangXlsx]);
+        }
+
+        salesRows.push(['', '', 'TOTAL REFUND :', -totalRefundXlsx]);
+        salesRows.push(['', '', 'KAS HARI INI :', kasHariIni]);
+
+        // --- REFUND BARANG HARI INI (di bawah KAS HARI INI, sama seperti di spreadsheet) ---
+        if (refundsToday.length > 0) {
+          salesRows.push([]); // spacer
+          salesRows.push(['REFUND BARANG HARI INI']);
+          salesRows.push(['Tgl Refund', 'Tgl Beli', 'Kode', 'Nama Barang', 'Qty', 'Harga/Pcs', 'Total Refund']);
+          let totalRefundSum = 0;
+          refundsToday.forEach(r => {
+            let pDate = r.originalPurchaseDate;
+            if (!pDate && r.transactionId) {
+              const trx = transactions.find(t => t.id === r.transactionId);
+              if (trx) pDate = trx.date;
+            }
+            let displayPDate = '-';
+            if (pDate) {
+              const isSameDay = r.date.split('T')[0] === pDate.split('T')[0];
+              displayPDate = isSameDay ? 'Di hari yg sama' : new Date(pDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '');
+            }
+            const totalItem = (r.item.quantity || 1) * (r.item.price || 0);
+            salesRows.push([
+              new Date(r.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
+              displayPDate,
+              r.item.sku || '-',
+              r.item.name || '-',
+              r.item.quantity || 1,
+              r.item.price || 0,
+              -totalItem
+            ]);
+            totalRefundSum += totalItem;
+          });
+          salesRows.push(['Total Refund: ' + refundsToday.length + ' item', '', '', '', '', 'TOTAL:', -totalRefundSum]);
+        }
+
+        // --- CATATAN (di bawah refund, sama seperti di spreadsheet) ---
+        const notesForXlsx = getNotes().filter((n: any) => {
+          const creationDate = n.date.split('T')[0];
+          const todayStr2 = new Date().toISOString().split('T')[0];
+          if (n.type === 'hutang') {
+            const completionDate = n.completedAt ? n.completedAt.split('T')[0] : null;
+            return (creationDate === todayStr2) || (completionDate === todayStr2) || (!n.completed);
+          }
+          return creationDate === todayStr2;
+        });
+        if (notesForXlsx.length > 0) {
+          salesRows.push([]); // spacer
+          salesRows.push(['CATATAN']);
+          salesRows.push(['Tgl', 'Jenis', 'Nama', 'Isi Catatan', 'Jumlah', 'Status', 'Tgl Selesai']);
+          notesForXlsx.forEach((n: any) => {
+            const status = n.type === 'hutang' ? (n.completed ? 'LUNAS' : 'BELUM BAYAR') : '';
+            const tglSelesai = n.completedAt ? new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : (n.type === 'hutang' ? '-' : '');
+            salesRows.push([
+              new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
+              n.type.toUpperCase(),
+              n.customerName || '-',
+              n.content,
+              n.amount || 0,
+              status,
+              tglSelesai
+            ]);
+          });
+        }
+
+        const wsSales = XLSX.utils.aoa_to_sheet(salesRows);
+        // Bold helper: apply bold to a row in a worksheet
+        const boldRow = (ws: any, row: number, cols: number) => {
+          for (let c = 0; c < cols; c++) {
+            const addr = XLSX.utils.encode_cell({ r: row, c });
+            if (ws[addr]) {
+              ws[addr].s = { font: { bold: true } };
+            }
+          }
+        };
+        // Bold headers di sheet Penjualan
+        boldRow(wsSales, 0, 8); // Tanggal
+        boldRow(wsSales, 1, 8); // Terakhir Update
+        // Cari row index untuk section headers
+        salesRows.forEach((row, idx) => {
+          const val = String(row[0] || '');
+          if (val === 'TAMU HARI INI' || val === 'PENJUALAN HARI INI' || val === 'CATATAN' || val === 'DAFTAR LOST:' || val === 'REFUND BARANG HARI INI') {
+            boldRow(wsSales, idx, 8);
+          }
+          if (val === '< 12' || val === 'KODE' || val === 'Tgl' || val === 'Tgl Refund') {
+            boldRow(wsSales, idx, 8);
+          }
+          if (val.startsWith('Total Refund:')) {
+            boldRow(wsSales, idx, 8);
+          }
+          const val2 = String(row[2] || '');
+          if (val2 === 'TOTAL :' || val2 === 'TOTAL DISKON :' || val2 === 'BELANJA KASIR :' || val2 === 'TOTAL REFUND :' || val2 === 'KAS HARI INI :' || val2 === 'HUTANG HARI INI :' || val2 === 'PELUNASAN HUTANG :') {
+            boldRow(wsSales, idx, 8);
+          }
+        });
+        XLSX.utils.book_append_sheet(wb, wsSales, "Penjualan");
+
+        // --- SHEET: DATA PENGUNJUNG (bulanan, seperti di Recap spreadsheet) ---
+        const visitorRows: any[][] = [];
+        visitorRows.push(['DATA PENGUNJUNG - ' + monthYear]);
+        visitorRows.push([]);
+        visitorRows.push(['Tanggal', '< Jam 12', '> Jam 12', 'Total Tamu', 'Lost']);
+        let totalB12 = 0, totalA12 = 0, totalTamu = 0, totalLost = 0;
+        dailyVisitors.forEach(day => {
+          const dayTotal = day.before12 + day.after12;
+          visitorRows.push([day.date, day.before12, day.after12, dayTotal, day.lost]);
+          totalB12 += day.before12;
+          totalA12 += day.after12;
+          totalTamu += dayTotal;
+          totalLost += day.lost;
+        });
+        visitorRows.push(['TOTAL', totalB12, totalA12, totalTamu, totalLost]);
+
+        // Daftar Lost di bawah tabel
+        if (allLostList.length > 0) {
+          visitorRows.push([]);
+          visitorRows.push(['DAFTAR LOST']);
+          visitorRows.push(['No', 'Tanggal', 'Nama Barang']);
+          allLostList.forEach((item, idx) => {
+            visitorRows.push([idx + 1, item.date, item.description]);
+          });
+        }
+
+        const wsVisitors = XLSX.utils.aoa_to_sheet(visitorRows);
+        boldRow(wsVisitors, 0, 5); // Title
+        boldRow(wsVisitors, 2, 5); // Header kolom
+        // Bold TOTAL row & DAFTAR LOST header
+        visitorRows.forEach((row, idx) => {
+          const val = String(row[0] || '');
+          if (val === 'TOTAL' || val === 'DAFTAR LOST') {
+            boldRow(wsVisitors, idx, 5);
+          }
+          if (val === 'No') {
+            boldRow(wsVisitors, idx, 3);
+          }
+        });
+        XLSX.utils.book_append_sheet(wb, wsVisitors, "Data Pengunjung");
+
+        // --- Kirim 1 file XLSX ke Telegram ---
+        const xlsxBuffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+        const xlsxBlob = new Blob([xlsxBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const xlsxFileName = `Laporan-Harian-${dateForFile}.xlsx`;
+
+        // Auto-download ke device kasir
+        const downloadUrl = URL.createObjectURL(xlsxBlob);
+        const downloadLink = document.createElement('a');
+        downloadLink.href = downloadUrl;
+        downloadLink.download = xlsxFileName;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        URL.revokeObjectURL(downloadUrl);
 
         const formData1 = new FormData();
         formData1.append('chat_id', TELEGRAM_CHAT_ID);
-        formData1.append('document', xlsxBlob1, `Penjualan-Harian-${dateForFile}.xlsx`);
-        formData1.append('caption', `📦 Penjualan Harian - ${tanggalHariIni}`);
+        formData1.append('document', xlsxBlob, xlsxFileName);
+        formData1.append('caption', `📊 Laporan Harian - ${tanggalHariIni}`);
 
         await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument`, {
           method: "POST",
           body: formData1
-        });
-
-        // ═══════════════════════════════════════════
-        // FILE 2: Rekap Barang Terlaris & Tamu (XLSX)
-        // ═══════════════════════════════════════════
-        const bestSellersData = monthlyItems.map((item, idx) => ({
-          'Rank': idx + 1,
-          'Kode': item.sku,
-          'Nama': item.name,
-          'Qty Terjual': item.quantity,
-          'Total Penjualan': item.total
-        }));
-
-        const visitorsData = dailyVisitors.map(day => ({
-          'Tanggal': day.date,
-          '< Jam 12': day.before12,
-          '> Jam 12': day.after12,
-          'Total Tamu': day.before12 + day.after12,
-          'Lost': day.lost
-        }));
-
-        const wb2 = XLSX.utils.book_new();
-        const ws2a = XLSX.utils.json_to_sheet(bestSellersData);
-        const ws2b = XLSX.utils.json_to_sheet(visitorsData);
-        XLSX.utils.book_append_sheet(wb2, ws2a, "Barang Terlaris");
-        XLSX.utils.book_append_sheet(wb2, ws2b, "Data Tamu");
-        const xlsxBuffer2 = XLSX.write(wb2, { type: 'array', bookType: 'xlsx' });
-        const xlsxBlob2 = new Blob([xlsxBuffer2], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-
-        const formData2 = new FormData();
-        formData2.append('chat_id', TELEGRAM_CHAT_ID);
-        formData2.append('document', xlsxBlob2, `Rekap-Barang-Terlaris-Tamu-${monthYear.replace(' ', '-')}.xlsx`);
-        formData2.append('caption', `🏆 Rekap Barang Terlaris & Tamu - ${monthYear}`);
-
-        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument`, {
-          method: "POST",
-          body: formData2
         });
 
         // ═══════════════════════════════════════════
@@ -1152,6 +1397,7 @@ const Dashboard = () => {
       setSendingToSheets(false);
     }
   };
+
 
   // State untuk kirim rekap bulanan (tidak dipakai lagi tapi tetap ada untuk kompatibilitas)
   const [sendingMonthlyRecap, setSendingMonthlyRecap] = useState(false);
@@ -1442,15 +1688,6 @@ const Dashboard = () => {
               )}
             </div>
 
-            {/* Button to see monthly revenue detail */}
-            <Button
-              variant="outline"
-              className="w-full mt-4 border-amber-200 text-amber-700 hover:bg-amber-50 hover:border-amber-300"
-              onClick={() => setMonthlyRevenueDialogOpen(true)}
-            >
-              Lihat Detail Omset Bulan Ini
-              <ArrowUpRight className="h-4 w-4 ml-2" />
-            </Button>
           </CardContent>
         </Card>
 
@@ -1875,16 +2112,7 @@ const Dashboard = () => {
 
                       {/* Actions Group (Horizontal) */}
                       <div className="flex items-center gap-1 shrink-0">
-                        {!note.completed && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-6 w-6 p-0 bg-green-50 border-green-300 text-green-700 hover:bg-green-100"
-                            onClick={() => setConfirmCompleteNoteId(note.id)}
-                          >
-                            <Check className="h-2.5 w-2.5" />
-                          </Button>
-                        )}
+
                         {!note.completed && (
                           <Button
                             variant="outline"
@@ -1994,13 +2222,13 @@ const Dashboard = () => {
                     size="sm"
                     className="h-8 text-[10px] text-red-500 hover:text-red-600 hover:bg-red-50 font-bold"
                     onClick={() => {
-                      if (confirm('Hapus semua daftar hutang?')) {
-                        clearHutang(false);
+                      if (confirm('Hapus semua hutang yang sudah LUNAS?')) {
+                        clearHutang(true);
                         refreshHutang();
                       }
                     }}
                   >
-                    <Trash2 className="h-3 w-3 mr-1" /> HAPUS SEMUA
+                    <Trash2 className="h-3 w-3 mr-1" /> HAPUS LUNAS
                   </Button>
                 )}
               </div>
@@ -2359,218 +2587,6 @@ const Dashboard = () => {
           </DialogContent>
         </Dialog>
 
-        {/* Monthly Revenue Detail Dialog */}
-        <Dialog open={monthlyRevenueDialogOpen} onOpenChange={setMonthlyRevenueDialogOpen}>
-          <DialogContent className="max-w-md max-h-[85vh] overflow-hidden flex flex-col">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <Calendar className="h-5 w-5 text-amber-500" />
-                Detail Omset Bulan Ini
-              </DialogTitle>
-              <DialogDescription>
-                {new Date().toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex-1 overflow-y-auto pr-2 -mr-2">
-              {(() => {
-                const now = new Date();
-                const year = now.getFullYear();
-                const month = now.getMonth();
-                const today = now.getDate();
-                const allExchanges = getExchanges();
-
-                // Calculate daily revenue with exchange adjustments
-                const dailyData: Array<{
-                  date: string;
-                  dateLabel: string;
-                  originalRevenue: number;
-                  adjustments: Array<{ type: 'tukar-keluar' | 'tukar-masuk' | 'refund'; amount: number; note: string; exchangeId?: string }>;
-                  actualRevenue: number;
-                }> = [];
-
-                let monthTotal = 0;
-                let adjustmentTotal = 0;
-
-                for (let day = 1; day <= today; day++) {
-                  const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                  const dateLabel = new Date(year, month, day).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
-
-                  // Get transactions for this day
-                  const dayTransactions = transactions.filter(t =>
-                    t.date.startsWith(dateStr) && t.status !== 'refunded' && t.status !== 'cancelled'
-                  );
-                  const originalRevenue = dayTransactions.reduce((sum, t) => sum + t.total, 0);
-
-                  // Get exchange adjustments affecting this day
-                  // Exchanges that reduced original transaction on this date (negative)
-                  // AND exchanges that happened on this date (INFO only - already included in transactions)
-                  const adjustments: Array<{ type: 'tukar-keluar' | 'tukar-masuk' | 'refund'; amount: number; note: string; dateInfo?: string; exchangeId?: string }> = [];
-
-                  allExchanges.forEach(ex => {
-                    const exchangeDate = ex.date.split('T')[0];
-
-                    // Check if the original purchase was on this date (negative adjustment - item returned)
-                    if (ex.originalPurchaseDate) {
-                      const purchaseDate = ex.originalPurchaseDate.split('T')[0];
-                      if (purchaseDate === dateStr) {
-                        // Original transaction on this day was reduced
-                        const reducedAmount = ex.originalItem.price * ex.originalItem.quantity;
-                        // Shorten name for compact display (max 15 chars)
-                        const shortName = ex.originalItem.name.length > 15 ? ex.originalItem.name.substring(0, 15) + '...' : ex.originalItem.name;
-                        // Format exchange date for display
-                        const exDateLabel = new Date(ex.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
-                        adjustments.push({
-                          type: 'tukar-keluar',
-                          amount: -reducedAmount,
-                          note: `${shortName} (${ex.originalItem.quantity} pcs)`,
-                          dateInfo: `Ditukar ${exDateLabel}`,
-                          exchangeId: ex.id
-                        });
-                      }
-                    }
-
-                    // Check if exchange happened on this date - show selisih (price difference)
-                    // NOTE: This is INFO only - the actual transactions already reflect the new item
-                    if (exchangeDate === dateStr) {
-                      const selisih = ex.priceDifference || 0;
-                      // Shorten names for compact display (max 12 chars each)
-                      const shortOld = ex.originalItem.name.length > 12 ? ex.originalItem.name.substring(0, 12) + '...' : ex.originalItem.name;
-                      const shortNew = ex.newItem.name.length > 12 ? ex.newItem.name.substring(0, 12) + '...' : ex.newItem.name;
-                      // Format original purchase date for display
-                      const purchaseDateLabel = ex.originalPurchaseDate
-                        ? new Date(ex.originalPurchaseDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
-                        : null;
-                      adjustments.push({
-                        type: 'tukar-masuk',
-                        amount: selisih,
-                        note: `${shortOld} → ${shortNew}`,
-                        dateInfo: purchaseDateLabel ? `Dari ${purchaseDateLabel}` : undefined,
-                        exchangeId: ex.id
-                      });
-                    }
-                  });
-
-                  // Only count tukar-keluar (negative) in adjustments, tukar-masuk is just for info
-                  const totalAdjustment = adjustments.filter(a => a.type !== 'tukar-masuk').reduce((sum, a) => sum + a.amount, 0);
-                  const actualRevenue = originalRevenue + totalAdjustment;
-
-                  monthTotal += actualRevenue;
-                  adjustmentTotal += totalAdjustment;
-
-                  if (originalRevenue > 0 || adjustments.length > 0) {
-                    dailyData.push({
-                      date: dateStr,
-                      dateLabel,
-                      originalRevenue,
-                      adjustments,
-                      actualRevenue
-                    });
-                  }
-                }
-
-                return (
-                  <div className="space-y-2">
-                    {/* Summary */}
-                    <div className="bg-amber-50 p-3 rounded-lg border border-amber-200 mb-4">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-medium text-amber-700">Total Omset Bulan Ini</span>
-                        <span className="text-lg font-bold text-amber-600">{formatCurrency(monthTotal)}</span>
-                      </div>
-                      {adjustmentTotal !== 0 && (
-                        <div className="text-xs text-amber-600 mt-1">
-                          Termasuk penyesuaian tukar: {formatCurrency(adjustmentTotal)}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Daily list */}
-                    {dailyData.length > 0 ? (
-                      dailyData.reverse().map((day, idx) => {
-                        // Check if there are real adjustments (tukar-keluar, not just info)
-                        const hasRealAdjustment = day.adjustments.some(a => a.type !== 'tukar-masuk');
-                        const hasExchangeInfo = day.adjustments.some(a => a.type === 'tukar-masuk');
-
-                        // Calculate base revenue (without exchange adjustments from today)
-                        // For strikethrough display: show what it would be WITHOUT the tukar-masuk amounts
-                        const tukarMasukTotal = day.adjustments
-                          .filter(a => a.type === 'tukar-masuk')
-                          .reduce((sum, a) => sum + a.amount, 0);
-                        const baseRevenue = day.originalRevenue - tukarMasukTotal; // Revenue before exchange additions
-
-                        // Show strikethrough if there's any difference due to exchanges (keluar or masuk)
-                        const hasAnyExchangeEffect = hasRealAdjustment || (hasExchangeInfo && tukarMasukTotal !== 0);
-
-                        return (
-                          <div key={day.date} className={`p-3 rounded-lg border ${hasRealAdjustment ? 'bg-orange-50 border-orange-200' : hasExchangeInfo ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
-                            <div className="flex justify-between items-start">
-                              <span className="font-medium text-sm">{day.dateLabel}</span>
-                              {hasAnyExchangeEffect ? (
-                                <div className="text-right">
-                                  <div className="text-sm text-gray-400 line-through">
-                                    {formatCurrency(hasRealAdjustment ? day.originalRevenue : baseRevenue)}
-                                  </div>
-                                  <div className={`text-sm font-bold ${hasRealAdjustment ? 'text-orange-600' : 'text-green-700'}`}>
-                                    {formatCurrency(hasRealAdjustment ? day.actualRevenue : day.originalRevenue)}
-                                  </div>
-                                </div>
-                              ) : (
-                                <span className={`font-bold text-sm ${hasExchangeInfo ? 'text-green-700' : 'text-gray-700'}`}>{formatCurrency(day.originalRevenue)}</span>
-                              )}
-                            </div>
-                            {day.adjustments.length > 0 && (
-                              <div className="mt-1.5 space-y-0.5">
-                                {day.adjustments.map((adj, i) => (
-                                  <div key={i} className={`text-[10px] flex items-center gap-0.5 leading-tight flex-wrap ${adj.type === 'tukar-masuk' ? (adj.amount > 0 ? 'text-green-600' : adj.amount < 0 ? 'text-red-500' : 'text-gray-500') : adj.amount >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                                    {adj.type === 'tukar-masuk' ? (
-                                      <>
-                                        <span>💱</span>
-                                        <span className="font-semibold">{adj.amount > 0 ? '+' : ''}{formatCurrency(adj.amount)}</span>
-                                        <span className="text-gray-500 truncate max-w-[120px]">{adj.note}</span>
-                                        {adj.dateInfo && <span className="text-purple-500 text-[9px]">· {adj.dateInfo}</span>}
-                                      </>
-                                    ) : (
-                                      <>
-                                        <span className="font-semibold">{formatCurrency(adj.amount)}</span>
-                                        <span className="text-gray-500 truncate max-w-[140px]">{adj.note}</span>
-                                        {adj.dateInfo && <span className="text-blue-500 text-[9px]">· {adj.dateInfo}</span>}
-                                      </>
-                                    )}
-                                    <span
-                                      className="text-[8px] px-1.5 py-0.5 bg-purple-100 text-purple-600 rounded cursor-pointer hover:bg-purple-200 ml-1 flex-shrink-0"
-                                      onClick={() => {
-                                        setMonthlyRevenueDialogOpen(false);
-                                        navigate('/history', { state: { highlightExchangeId: adj.exchangeId, tab: 'history' } });
-                                      }}
-                                    >
-                                      Lihat
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="text-center py-8 text-muted-foreground">
-                        Belum ada transaksi bulan ini
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-            <DialogFooter className="pt-4 border-t">
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => setMonthlyRevenueDialogOpen(false)}
-              >
-                Tutup
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </main >
     </div >
   );

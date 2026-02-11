@@ -111,3 +111,11 @@ export function addRefund(record: Omit<RefundRecord, 'id'>): RefundRecord {
     return newRecord
 }
 
+export function deleteRefund(id: string): boolean {
+    const refunds = getRefunds()
+    const newRefunds = refunds.filter(r => r.id !== id)
+    if (newRefunds.length === refunds.length) return false
+    saveToLS(REFUND_KEY, newRefunds)
+    return true
+}
+

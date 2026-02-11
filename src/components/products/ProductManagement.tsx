@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   TrendingUp,
   X,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -156,15 +157,24 @@ const ProductManagement = () => {
   const [selectedPrefix, setSelectedPrefix] = useState<string>("all");
   const [showProfitAnalysis, setShowProfitAnalysis] = useState(false);
 
-  // Google Sheets API URL - loaded from settings/localStorage
-  const SHEETS_API_URL = getConfig().gasUrl;
 
-  // Sync products from Google Sheets
-  const syncFromSheets = async () => {
-    setIsSyncing(true);
-    setSyncMessage("Mengambil data dari Sheet...");
+  // Sync products from Google Sheets - MIRROR MODE (App follows Sheet exactly)
+  const syncFromSheets = async (isAuto = false) => {
+    if (!isAuto) {
+      if (!confirm("Apakah Anda yakin ingin sinkronisasi data? \n\nData produk di HP akan diperbarui mengikuti data terbaru dari Google Sheet.")) return;
+      setIsSyncing(true);
+      setSyncMessage("Mengambil data dari Sheet...");
+    }
     try {
-      const response = await fetch(SHEETS_API_URL + "?action=getProducts");
+      const config = getConfig();
+      const targetUrl = config.productGasUrl || config.gasUrl;
+
+      if (!targetUrl) {
+        if (!isAuto) throw new Error("URL Google Sheets belum dikonfigurasi di Setting");
+        return;
+      }
+
+      const response = await fetch(targetUrl + "?action=getProducts");
       const text = await response.text();
 
       // Parse response
@@ -180,67 +190,99 @@ const ProductManagement = () => {
       }
 
       if (data.products && Array.isArray(data.products)) {
-        // Merge dengan produk lokal (update yang ada, tambah yang baru)
-        const localProducts = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
-        const mergedProducts: Product[] = [...localProducts];
-
-        data.products.forEach((sheetProd: any) => {
-          const existingIndex = mergedProducts.findIndex(p => p.sku === sheetProd.kode);
-          const newProd: Product = {
-            id: existingIndex >= 0 ? mergedProducts[existingIndex].id : `prod-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            sku: sheetProd.kode || "",
-            name: sheetProd.nama || "",
-            category: sheetProd.kategori || "Umum",
-            price: Number(sheetProd.hargaJual) || 0,
-            purchasePrice: Number(sheetProd.hargaBeli) || 0,
-            stock: Number(sheetProd.stok) || 0,
-            type: "product",
-            threshold: 5
-          };
-
-          if (existingIndex >= 0) {
-            mergedProducts[existingIndex] = { ...mergedProducts[existingIndex], ...newProd };
-          } else {
-            mergedProducts.push(newProd);
+        // Auto-detect kategori dari prefix kode
+        const getCategoryFromCode = (code: string): string => {
+          const prefix = code.substring(0, 2).toUpperCase();
+          switch (prefix) {
+            case 'BA': return 'BAUT OTOMOTIF';
+            case 'BG': return 'BAUT GENERAL';
+            case 'BK': return 'BAUT KAYU';
+            case 'KG': return 'KILOGRAM';
+            case 'TL': return 'TOOLS';
+            default: return 'UMUM';
           }
-        });
+        };
 
-        saveToLS(LS_KEYS.PRODUCTS, mergedProducts);
-        setProducts(mergedProducts);
-        setSyncMessage(`✓ Berhasil sync ${data.products.length} produk!`);
-        setTimeout(() => setSyncMessage(""), 3000);
+        // FULL REPLACE: Data HP mengikuti Sheet sepenuhnya
+        const sheetProducts: Product[] = data.products.map((sheetProd: any) => ({
+          id: `prod-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          sku: String(sheetProd.kode || "").toUpperCase(),
+          name: sheetProd.nama || "",
+          category: getCategoryFromCode(sheetProd.kode || ""),
+          price: Number(sheetProd.hargaJual) || 0,
+          purchasePrice: Number(sheetProd.hargaBeli) || 0,
+          stock: Number(sheetProd.stok) || 0,
+          type: "product",
+          threshold: 5
+        }));
+
+        saveToLS(LS_KEYS.PRODUCTS, sheetProducts);
+        setProducts(sheetProducts);
+        try { window.dispatchEvent(new CustomEvent('pos:products:update', { detail: sheetProducts })); } catch { }
+
+        if (!isAuto) {
+          alert(`✅ Sinkronisasi Berhasil!\n\n${sheetProducts.length} produk di HP sekarang sama persis dengan yang ada di Google Sheet.`);
+          setSyncMessage(`✓ Berhasil sync ${sheetProducts.length} produk`);
+        }
+        setTimeout(() => setSyncMessage(""), 5000);
       } else {
         throw new Error("Data produk tidak ditemukan");
       }
     } catch (error) {
-      setSyncMessage(`✗ Gagal: ${(error as Error).message}`);
-      setTimeout(() => setSyncMessage(""), 5000);
+      if (!isAuto) {
+        setSyncMessage(`✗ Gagal: ${(error as Error).message}`);
+        setTimeout(() => setSyncMessage(""), 5000);
+      }
     } finally {
-      setIsSyncing(false);
+      if (!isAuto) setIsSyncing(false);
     }
   };
 
-  // Upload product to Google Sheets (saat edit)
-  const syncProductToSheet = async (product: Product) => {
+  // Upload product to Google Sheets (saat edit/tambah)
+  const pushProductToSheet = async (product: Product) => {
     try {
-      await fetch(SHEETS_API_URL, {
+      const config = getConfig();
+      const targetUrl = config.productGasUrl || config.gasUrl;
+      if (!targetUrl) return;
+
+      await fetch(targetUrl, {
         method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
-          action: "updateProduct",
+          action: "updateProductActive",
           product: {
             kode: product.sku,
             nama: product.name,
-            kategori: product.category,
-            hargaJual: product.price,
             hargaBeli: product.purchasePrice,
+            hargaJual: product.price,
             stok: product.stock
           }
         })
       });
+      console.log(`[Sync] Updated ${product.sku} on Sheet`);
     } catch (error) {
-      console.error("Failed to sync product to sheet:", error);
+      console.error("Failed to push product to sheet:", error);
+    }
+  };
+
+  // Delete product from Google Sheets
+  const deleteProductFromSheet = async (sku: string) => {
+    try {
+      const config = getConfig();
+      const targetUrl = config.productGasUrl || config.gasUrl;
+      if (!targetUrl || !sku) return;
+
+      await fetch(targetUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          action: "deleteProductActive",
+          kode: sku
+        })
+      });
+      console.log(`[Sync] Deleted ${sku} from Sheet`);
+    } catch (error) {
+      console.error("Failed to delete product from sheet:", error);
     }
   };
 
@@ -256,6 +298,9 @@ const ProductManagement = () => {
     } else {
       setProducts(storedProducts);
     }
+
+    // AUTO-SYNC dari Sheet saat buka halaman
+    syncFromSheets(true);
 
     const onProductsUpdate = (e: any) => {
       try {
@@ -478,6 +523,10 @@ const ProductManagement = () => {
     const updatedProducts = [...products, productToAdd];
     setProducts(updatedProducts);
     saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+
+    // AUTO-PUSH ke Google Sheet
+    pushProductToSheet(productToAdd);
+
     try { window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts })); } catch { }
 
     setIsAddProductOpen(false);
@@ -497,16 +546,27 @@ const ProductManagement = () => {
 
     setProducts(updatedProducts);
     saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+
+    // AUTO-PUSH ke Google Sheet
+    pushProductToSheet(selectedProduct);
+
     setIsEditProductOpen(false);
   };
 
   const handleDeleteProduct = (productId: string) => {
-    if (confirm("Apakah Anda yakin ingin menghapus produk ini?")) {
+    const productToDelete = products.find(p => p.id === productId);
+    if (!productToDelete) return;
+
+    if (confirm(`Apakah Anda yakin ingin menghapus produk ${productToDelete.name} dari HP ini?`)) {
       const updatedProducts = products.filter(
         (product) => product.id !== productId,
       );
       setProducts(updatedProducts);
       saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+
+      // (DIHAPUS) Tidak lagi menghapus di Google Sheet agar database tetap utuh.
+      // Jika ingin muncul lagi, silakan lakukan Sync.
+
       try { window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts })); } catch { }
     }
   };
@@ -617,10 +677,12 @@ const ProductManagement = () => {
               Tambah
             </Button>
             <Button
-              onClick={() => setIsBulkImportOpen(true)}
-              className="bg-blue-500 hover:bg-blue-600 h-11 text-xs px-1"
+              onClick={() => syncFromSheets(false)}
+              disabled={isSyncing}
+              className="bg-blue-600 hover:bg-blue-700 h-11 text-xs px-1"
             >
-              Bulk Import
+              <RefreshCw className={`h-4 w-4 mr-1 ${isSyncing ? 'animate-spin' : ''}`} />
+              {isSyncing ? 'Syncing...' : 'Sync Sheet'}
             </Button>
             <Button
               onClick={() => handleExportExcel(true)}
@@ -629,7 +691,14 @@ const ProductManagement = () => {
               Export
             </Button>
 
-            {/* Tombol Hapus Semua dipindah ke ruang kosong */}
+            <Button
+              onClick={() => setIsBulkImportOpen(true)}
+              variant="outline"
+              className="h-11 text-xs px-1 border-blue-200 text-blue-600 hover:bg-blue-50"
+            >
+              Bulk Import
+            </Button>
+
             <Button
               onClick={() => setShowDeleteAllConfirm(true)}
               variant="destructive"
@@ -640,24 +709,24 @@ const ProductManagement = () => {
               Hapus Semua
             </Button>
 
-            {/* Filter Produk Tanpa Harga diperkecil dan diletakkan di grid */}
             <Button
               variant={showNoPriceOnly ? "default" : "outline"}
-              className={`col-span-2 h-11 text-xs ${showNoPriceOnly ? 'bg-red-500 hover:bg-red-600 text-white' : ''}`}
+              className={`h-11 text-xs ${showNoPriceOnly ? 'bg-red-500 hover:bg-red-600 text-white' : ''}`}
               onClick={() => {
                 setShowNoPriceOnly(!showNoPriceOnly);
                 setCurrentPage(1);
               }}
             >
               <AlertTriangle className="h-4 w-4 mr-1" />
-              {showNoPriceOnly ? 'Tampilkan Semua' : 'Tanpa Harga'}
-              {!showNoPriceOnly && products.filter(p => !p.price || p.price === 0).length > 0 && (
-                <span className="ml-1 bg-red-500 text-white px-1.5 py-0.5 rounded-full text-[10px]">
-                  {products.filter(p => !p.price || p.price === 0).length}
-                </span>
-              )}
+              {showNoPriceOnly ? 'Semua' : 'No Price'}
             </Button>
           </div>
+
+          {syncMessage && (
+            <div className={`mt-2 p-2 rounded text-[11px] text-center border animate-in fade-in slide-in-from-top-1 duration-300 ${syncMessage.includes('✗') || syncMessage.includes('Gagal') ? 'bg-red-50 border-red-200 text-red-600' : 'bg-blue-50 border-blue-200 text-blue-600'}`}>
+              {syncMessage}
+            </div>
+          )}
 
           {/* Quick Prefix Filters - Lebih besar */}
           <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
@@ -712,7 +781,7 @@ const ProductManagement = () => {
                         <div className="min-w-0 flex-1">
                           <h3 className="font-medium text-sm truncate">{product.name || '-'}</h3>
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <span className="font-mono">{product.sku || '-'}</span>
+                            <span className="text-[10px] px-2 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200 uppercase">{product.sku || '-'}</span>
                             <span className="px-1.5 py-0.5 bg-muted rounded text-[10px]">{product.category || '-'}</span>
                             {/* Profit margin badge hidden for cashier view */}
                             {/* {product.purchasePrice > 0 && product.price > 0 && (() => {

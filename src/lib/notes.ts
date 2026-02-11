@@ -11,6 +11,7 @@ export interface Note {
     completed: boolean;
     completedAt?: string; // ISO string - tanggal selesai
     editedAt?: string; // ISO string - tanggal terakhir diedit
+    transactionId?: string; // ID Transaksi yang terkait
 }
 
 const NOTES_KEY = 'bengkel_notes';
@@ -74,6 +75,15 @@ export function reopenNote(id: string): boolean {
 export function deleteNote(id: string): boolean {
     const notes = getNotes();
     const newNotes = notes.filter(n => n.id !== id);
+    if (newNotes.length === notes.length) return false;
+    saveToLS(NOTES_KEY, newNotes);
+    return true;
+}
+
+export function deleteNoteByTransactionId(transactionId: string): boolean {
+    if (!transactionId) return false;
+    const notes = getNotes();
+    const newNotes = notes.filter(n => n.transactionId !== transactionId);
     if (newNotes.length === notes.length) return false;
     saveToLS(NOTES_KEY, newNotes);
     return true;

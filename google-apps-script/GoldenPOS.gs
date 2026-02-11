@@ -81,6 +81,11 @@ function doPost(e) {
             return saveMonthlyRecap(data);
         }
 
+        // Rebuild Omzet Sheet from scratch
+        if (action === "rebuildOmzetSheet") {
+            return rebuildOmzetSheetFromData(data);
+        }
+
         // Default: Kirim data penjualan
         var result = saveSalesData(data);
 
@@ -249,6 +254,13 @@ function resetSheets(data) {
         recapSheet = ss.insertSheet(recapSheetName);
     }
 
+    // 3. Clear Omzet Sheet completely
+    var omzetSheetName = "Omzet " + month;
+    var omzetSheet = ss.getSheetByName(omzetSheetName);
+    if (omzetSheet) {
+        omzetSheet.clear(); // Clear everything - data, formatting, all
+    }
+
     // Call saveMonthlyRecap with empty data to create structure
     saveMonthlyRecap({
         month: month,
@@ -261,7 +273,7 @@ function resetSheets(data) {
 
     return ContentService.createTextOutput(JSON.stringify({
         success: true,
-        message: "Sheets reset: " + dailySheetName + ", " + recapSheetName
+        message: "Sheets reset: " + dailySheetName + ", " + recapSheetName + ", " + omzetSheetName
     })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -743,6 +755,358 @@ function updateProduct(product) {
     } catch (error) {
         return ContentService.createTextOutput(JSON.stringify({ success: false, error: error.toString() })).setMimeType(ContentService.MimeType.JSON);
     }
+}
+
+// ═══════════════════════════════════════════════════════
+// FUNGSI: Update Omzet Sheet (Ringkasan Omzet Bulanan)
+// ═══════════════════════════════════════════════════════
+function updateOmzetSheet(data, month, year) {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetName = "Omzet " + month;
+    
+    var sheet = ss.getSheetByName(sheetName);
+    var isNewSheet = false;
+    
+    if (!sheet) {
+        sheet = ss.insertSheet(sheetName);
+        isNewSheet = true;
+    }
+    
+    // Parse today's date
+    var today = data.date || new Date().toLocaleDateString("id-ID");
+    
+    // Calculate totals from data
+    var items = data.items || [];
+    var discount = data.discount || {};
+    var exchangeDiff = data.exchangeDifference || {};
+    
+    // Calculate Omzet Penjualan (sales excluding ADJ- transactions / Selisih Tukar items)
+    var omzetPenjualan = 0;
+    items.forEach(function(item) {
+        // Skip "Selisih Tukar:" items as they are exchange adjustments
+        if (item.kode && !String(item.kode).startsWith("EX-")) {
+            omzetPenjualan += item.total || 0;
+        }
+    });
+    
+    // Apply discount
+    var discountAmount = discount.totalAmount || 0;
+    omzetPenjualan = omzetPenjualan - discountAmount;
+    
+    // Selisih Tukar (exchange difference - positive or negative)
+    var selisihTukar = exchangeDiff.totalAmount || 0;
+    
+    // Total Kas Masuk = Omzet Penjualan + Selisih Tukar
+    var totalKasMasuk = omzetPenjualan + selisihTukar;
+    
+    // Get timestamp
+    var timestamp = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
+    
+    // If new sheet, create header structure
+    if (isNewSheet) {
+        // Title Row
+        sheet.getRange("A1:D1").merge()
+            .setValue("💰 OMZET BULANAN - " + month)
+            .setFontWeight("bold")
+            .setFontSize(14)
+            .setBackground("#1565C0")
+            .setFontColor("#FFFFFF")
+            .setHorizontalAlignment("center");
+        
+        // Last Update Row
+        sheet.getRange("A2:D2").merge()
+            .setValue("Terakhir Update: " + timestamp)
+            .setFontStyle("italic")
+            .setFontColor("#666666")
+            .setHorizontalAlignment("center");
+        
+        // Headers
+        sheet.getRange("A3:D3")
+            .setValues([["📅 Tanggal", "💵 Omzet Penjualan", "🔄 Selisih Tukar", "💰 Total Kas Masuk"]])
+            .setFontWeight("bold")
+            .setBackground("#BBDEFB")
+            .setHorizontalAlignment("center")
+            .setBorder(true, true, true, true, true, true, "#1976D2", SpreadsheetApp.BorderStyle.SOLID);
+        
+        // Set column widths
+        sheet.setColumnWidth(1, 120); // Tanggal
+        sheet.setColumnWidth(2, 150); // Omzet Penjualan
+        sheet.setColumnWidth(3, 130); // Selisih Tukar
+        sheet.setColumnWidth(4, 150); // Total Kas Masuk
+    } else {
+        // Update last update timestamp
+        sheet.getRange("A2:D2").merge()
+            .setValue("Terakhir Update: " + timestamp)
+            .setFontStyle("italic")
+            .setFontColor("#666666")
+            .setHorizontalAlignment("center");
+    }
+    
+    // Find if today's row already exists (to update instead of add new)
+    var lastRow = sheet.getLastRow();
+    var existingRow = -1;
+    
+    // Normalize today's date for comparison
+    var todayNormalized = String(today).trim().toLowerCase();
+    
+    if (lastRow >= 4) {
+        var dateColumn = sheet.getRange(4, 1, lastRow - 3, 1).getValues();
+        for (var i = 0; i < dateColumn.length; i++) {
+            // Normalize the cell value for comparison
+            var cellValue = String(dateColumn[i][0]).trim().toLowerCase();
+            // Skip TOTAL row
+            if (cellValue.indexOf("total") !== -1) continue;
+            
+            if (cellValue === todayNormalized) {
+                existingRow = i + 4; // +4 because data starts at row 4
+                break;
+            }
+        }
+    }
+    
+    // Also check if the last row is a TOTAL row (we need to handle it)
+    var hasTotalRow = false;
+    var totalRowIndex = -1;
+    if (lastRow >= 4) {
+        var lastCellValue = sheet.getRange(lastRow, 1).getValue();
+        if (String(lastCellValue).indexOf("TOTAL") !== -1) {
+            hasTotalRow = true;
+            totalRowIndex = lastRow;
+        }
+    }
+    
+    var targetRow;
+    if (existingRow > 0) {
+        // Update existing row
+        targetRow = existingRow;
+    } else {
+        // Insert new row before TOTAL row if exists, otherwise at the end
+        if (hasTotalRow) {
+            sheet.insertRowBefore(totalRowIndex);
+            targetRow = totalRowIndex;
+            totalRowIndex++; // TOTAL row moved down
+        } else {
+            targetRow = lastRow + 1;
+            if (targetRow < 4) targetRow = 4; // Minimum row 4 (after headers)
+        }
+    }
+    
+    // Write the data row
+    sheet.getRange(targetRow, 1, 1, 4)
+        .setValues([[today, omzetPenjualan, selisihTukar, totalKasMasuk]])
+        .setBorder(true, true, true, true, true, true, "#90CAF9", SpreadsheetApp.BorderStyle.SOLID);
+    
+    // Format number columns
+    sheet.getRange(targetRow, 2).setNumberFormat("#,##0").setHorizontalAlignment("right");
+    sheet.getRange(targetRow, 4).setNumberFormat("#,##0").setHorizontalAlignment("right").setFontWeight("bold");
+    
+    // Format Selisih Tukar with color
+    var selisihCell = sheet.getRange(targetRow, 3);
+    if (selisihTukar > 0) {
+        selisihCell.setNumberFormat("+#,##0").setFontColor("#2E7D32").setFontWeight("bold").setHorizontalAlignment("right");
+    } else if (selisihTukar < 0) {
+        selisihCell.setNumberFormat("#,##0").setFontColor("#D32F2F").setFontWeight("bold").setHorizontalAlignment("right");
+    } else {
+        selisihCell.setNumberFormat("#,##0").setFontColor("#666666").setHorizontalAlignment("right");
+    }
+    
+    // Calculate totals for all rows and update/create TOTAL row
+    var dataLastRow = hasTotalRow ? totalRowIndex - 1 : targetRow;
+    var sumOmzet = 0, sumSelisih = 0, sumKas = 0;
+    
+    if (dataLastRow >= 4) {
+        var allData = sheet.getRange(4, 2, dataLastRow - 3, 3).getValues();
+        allData.forEach(function(row) {
+            sumOmzet += row[0] || 0;
+            sumSelisih += row[1] || 0;
+            sumKas += row[2] || 0;
+        });
+    }
+    
+    // TOTAL Row position
+    var totalRow = hasTotalRow ? totalRowIndex : dataLastRow + 1;
+    
+    // Write TOTAL row
+    sheet.getRange(totalRow, 1, 1, 4)
+        .setValues([["📊 TOTAL:", sumOmzet, sumSelisih, sumKas]])
+        .setFontWeight("bold")
+        .setFontSize(11)
+        .setBackground("#1976D2")
+        .setFontColor("#FFFFFF")
+        .setBorder(true, true, true, true, true, true, "#1565C0", SpreadsheetApp.BorderStyle.SOLID);
+    
+    // Format TOTAL row numbers
+    sheet.getRange(totalRow, 2).setNumberFormat("#,##0");
+    sheet.getRange(totalRow, 4).setNumberFormat("#,##0");
+    
+    // Format TOTAL Selisih with appropriate sign
+    var totalSelisihCell = sheet.getRange(totalRow, 3);
+    if (sumSelisih > 0) {
+        totalSelisihCell.setNumberFormat("+#,##0");
+    } else {
+        totalSelisihCell.setNumberFormat("#,##0");
+    }
+    
+    // Move Omzet sheet to correct position (after Recap, before Harian)
+    if (isNewSheet) {
+        try {
+            var allSheets = ss.getSheets();
+            var recapSheetName = "Recap " + month;
+            var recapSheet = ss.getSheetByName(recapSheetName);
+            var harianSheetName = "Harian " + month;
+            var harianSheet = ss.getSheetByName(harianSheetName);
+            
+            ss.setActiveSheet(sheet);
+            
+            if (harianSheet) {
+                // Move to position right before Harian (which is at the end)
+                var harianIndex = harianSheet.getIndex();
+                ss.moveActiveSheet(harianIndex);
+            } else if (recapSheet) {
+                // Move after Recap
+                var recapIndex = recapSheet.getIndex();
+                ss.moveActiveSheet(recapIndex + 1);
+            } else {
+                // Move to end
+                ss.moveActiveSheet(allSheets.length);
+            }
+        } catch (moveError) {
+            Logger.log("Move Omzet sheet error: " + moveError.toString());
+        }
+    }
+    
+    return true;
+}
+
+// ═══════════════════════════════════════════════════════
+// FUNGSI: Rebuild Omzet Sheet dari Data Frontend
+// ═══════════════════════════════════════════════════════
+function rebuildOmzetSheetFromData(data) {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var month = data.month || "Unknown";
+    var sheetName = "Omzet " + month;
+    var omzetData = data.omzetData || [];
+    
+    // Delete existing sheet if exists
+    var existingSheet = ss.getSheetByName(sheetName);
+    if (existingSheet) {
+        ss.deleteSheet(existingSheet);
+    }
+    
+    // Create new sheet
+    var sheet = ss.insertSheet(sheetName);
+    
+    // Get timestamp
+    var timestamp = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
+    
+    // Title Row
+    sheet.getRange("A1:D1").merge()
+        .setValue("💰 OMZET BULANAN - " + month)
+        .setFontWeight("bold")
+        .setFontSize(14)
+        .setBackground("#1565C0")
+        .setFontColor("#FFFFFF")
+        .setHorizontalAlignment("center");
+    
+    // Last Update Row
+    sheet.getRange("A2:D2").merge()
+        .setValue("Terakhir Update (Rebuild): " + timestamp)
+        .setFontStyle("italic")
+        .setFontColor("#666666")
+        .setHorizontalAlignment("center");
+    
+    // Headers
+    sheet.getRange("A3:D3")
+        .setValues([["📅 Tanggal", "💵 Omzet Penjualan", "🔄 Selisih Tukar", "💰 Total Kas Masuk"]])
+        .setFontWeight("bold")
+        .setBackground("#BBDEFB")
+        .setHorizontalAlignment("center")
+        .setBorder(true, true, true, true, true, true, "#1976D2", SpreadsheetApp.BorderStyle.SOLID);
+    
+    // Set column widths
+    sheet.setColumnWidth(1, 120); // Tanggal
+    sheet.setColumnWidth(2, 150); // Omzet Penjualan
+    sheet.setColumnWidth(3, 130); // Selisih Tukar
+    sheet.setColumnWidth(4, 150); // Total Kas Masuk
+    
+    // Write data rows
+    var currentRow = 4;
+    var sumOmzet = 0, sumSelisih = 0, sumKas = 0;
+    
+    omzetData.forEach(function(day) {
+        sheet.getRange(currentRow, 1, 1, 4)
+            .setValues([[day.date, day.omzetPenjualan, day.selisihTukar, day.totalKasMasuk]])
+            .setBorder(true, true, true, true, true, true, "#90CAF9", SpreadsheetApp.BorderStyle.SOLID);
+        
+        // Format number columns
+        sheet.getRange(currentRow, 2).setNumberFormat("#,##0").setHorizontalAlignment("right");
+        sheet.getRange(currentRow, 4).setNumberFormat("#,##0").setHorizontalAlignment("right").setFontWeight("bold");
+        
+        // Format Selisih Tukar with color
+        var selisihCell = sheet.getRange(currentRow, 3);
+        if (day.selisihTukar > 0) {
+            selisihCell.setNumberFormat("+#,##0").setFontColor("#2E7D32").setFontWeight("bold").setHorizontalAlignment("right");
+        } else if (day.selisihTukar < 0) {
+            selisihCell.setNumberFormat("#,##0").setFontColor("#D32F2F").setFontWeight("bold").setHorizontalAlignment("right");
+        } else {
+            selisihCell.setNumberFormat("#,##0").setFontColor("#666666").setHorizontalAlignment("right");
+        }
+        
+        sumOmzet += day.omzetPenjualan || 0;
+        sumSelisih += day.selisihTukar || 0;
+        sumKas += day.totalKasMasuk || 0;
+        currentRow++;
+    });
+    
+    // TOTAL Row
+    sheet.getRange(currentRow, 1, 1, 4)
+        .setValues([["📊 TOTAL:", sumOmzet, sumSelisih, sumKas]])
+        .setFontWeight("bold")
+        .setFontSize(11)
+        .setBackground("#1976D2")
+        .setFontColor("#FFFFFF")
+        .setBorder(true, true, true, true, true, true, "#1565C0", SpreadsheetApp.BorderStyle.SOLID);
+    
+    // Format TOTAL row numbers
+    sheet.getRange(currentRow, 2).setNumberFormat("#,##0");
+    sheet.getRange(currentRow, 4).setNumberFormat("#,##0");
+    
+    // Format TOTAL Selisih with appropriate sign
+    var totalSelisihCell = sheet.getRange(currentRow, 3);
+    if (sumSelisih > 0) {
+        totalSelisihCell.setNumberFormat("+#,##0");
+    } else {
+        totalSelisihCell.setNumberFormat("#,##0");
+    }
+    
+    // Move Omzet sheet to correct position
+    try {
+        var allSheets = ss.getSheets();
+        var recapSheetName = "Recap " + month;
+        var recapSheet = ss.getSheetByName(recapSheetName);
+        var harianSheetName = "Harian " + month;
+        var harianSheet = ss.getSheetByName(harianSheetName);
+        
+        ss.setActiveSheet(sheet);
+        
+        if (harianSheet) {
+            var harianIndex = harianSheet.getIndex();
+            ss.moveActiveSheet(harianIndex);
+        } else if (recapSheet) {
+            var recapIndex = recapSheet.getIndex();
+            ss.moveActiveSheet(recapIndex + 1);
+        } else {
+            ss.moveActiveSheet(allSheets.length);
+        }
+    } catch (moveError) {
+        Logger.log("Move Omzet sheet error: " + moveError.toString());
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        message: "Omzet sheet rebuilt successfully",
+        rowsWritten: omzetData.length
+    })).setMimeType(ContentService.MimeType.JSON);
 }
 
 // Save sales data with formatting
@@ -1375,6 +1739,14 @@ function saveSalesData(data) {
         .setValue("═══════════════════════════════════════════════════════════════════════════════")
         .setBackground("#E0E0E0")
         .setFontColor("#666666");
+
+    // Update Omzet Sheet (ringkasan omzet bulanan)
+    var monthName = monthNames[now.getMonth()] + " " + now.getFullYear();
+    try {
+        updateOmzetSheet(data, monthName, now.getFullYear());
+    } catch (omzetError) {
+        Logger.log("Update Omzet Sheet error: " + omzetError.toString());
+    }
 
     // Return response with backup info
     var response = { success: true };

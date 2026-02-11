@@ -43,8 +43,9 @@ const CartScreen = () => {
   const [showHutangDialog, setShowHutangDialog] = useState(false);
   const [hutangCustomerName, setHutangCustomerName] = useState("");
 
-  // FIX QTY INPUT: State untuk menyimpan nilai string sementara saat user mengetik
+  // FIX QTY/PRICE INPUT: State untuk menyimpan nilai string sementara saat user mengetik
   const [editingQuantities, setEditingQuantities] = useState<Record<string, string>>({});
+  const [editingPrices, setEditingPrices] = useState<Record<string, string>>({});
   const printAreaRef = React.useRef<HTMLDivElement>(null);
 
   // Tambahkan state untuk pagination cart
@@ -212,16 +213,6 @@ const CartScreen = () => {
     // Buat deskripsi item yang dibeli
     const itemsList = cart.map(item => `${item.name} (${item.quantity}x)`).join(", ");
 
-    // Simpan sebagai note hutang
-    addNote({
-      date: new Date().toISOString(),
-      content: `Hutang: ${itemsList}`,
-      type: 'hutang',
-      customerName: hutangCustomerName.trim(),
-      amount: total,
-      priority: 'penting'
-    });
-
     // Proses transaksi seperti biasa (dengan payment method "hutang")
     const products = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
     const { transaction, updatedProducts } = await completeTransactionUtil({
@@ -234,6 +225,18 @@ const CartScreen = () => {
       total,
       discountPercent: parseFloat(discountPercent) || 0,
       discountAmount,
+      customerName: hutangCustomerName.trim(),
+    });
+
+    // Simpan sebagai note hutang (dengan Transaction ID)
+    addNote({
+      date: new Date().toISOString(),
+      content: `Hutang: ${itemsList}`,
+      type: 'hutang',
+      customerName: hutangCustomerName.trim(),
+      amount: total,
+      priority: 'penting',
+      transactionId: transaction.id // Link ke transaksi ini
     });
 
     // Perbarui produk di UI
@@ -270,6 +273,9 @@ const CartScreen = () => {
   const totalPages = Math.ceil(filteredCart.length / itemsPerPage);
   const paginatedCart = filteredCart.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
+  // Boolean to check if there are items with price or qty 0
+  const hasInvalidItems = cart.some(item => item.price === 0 || item.quantity === 0);
+
   console.log("CartScreen cart:", cart);
   return (
     <div className="min-h-screen bg-background flex flex-col pb-32">
@@ -292,12 +298,12 @@ const CartScreen = () => {
                 {/* Row 1: Name + SKU + Trash */}
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
-                    <p className="font-semibold text-xs text-gray-800 break-words leading-tight">{item.name}</p>
                     {item.sku && (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600 border border-gray-200">
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-slate-600 border border-slate-300 flex-shrink-0">
                         {item.sku}
                       </span>
                     )}
+                    <p className="font-semibold text-xs text-gray-800 break-words leading-tight">{item.name}</p>
                   </div>
                   <Button
                     variant="ghost"
@@ -309,35 +315,53 @@ const CartScreen = () => {
                   </Button>
                 </div>
                 {/* Row 2: Harga x Qty */}
-                <div className="flex items-center gap-1.5 mt-1">
-                  <span className="text-[10px] text-gray-400">Harga:</span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={item.price}
-                    onChange={e => {
-                      const newPrice = parseInt(e.target.value) || 0;
-                      setItemPrice(item.id, newPrice);
-                    }}
-                    onFocus={(e) => {
-                      setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
-                    }}
-                    className="w-16 px-1.5 py-0.5 border rounded text-right text-xs focus:ring-1 focus:ring-amber-400 focus:outline-none"
-                  />
-                  <span className="text-[10px] text-gray-400">x</span>
-                  <input
-                    type="number"
-                    value={editingQuantities[item.id] ?? item.quantity}
-                    onChange={(e) => {
-                      setEditingQuantities({ ...editingQuantities, [item.id]: e.target.value });
-                    }}
-                    onFocus={(e) => {
-                      setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
-                    }}
-                    onBlur={() => handleQuantityBlur(item)}
-                    placeholder="Qty"
-                    className="w-10 px-1 py-0.5 border rounded text-center text-xs focus:ring-1 focus:ring-amber-400 focus:outline-none"
-                  />
+                <div className="flex items-center gap-2 mt-1 px-1">
+                  <span className="text-[10px] text-blue-500 font-medium">Custom Harga</span>
+                  <div className="flex items-center border rounded bg-white overflow-hidden shadow-sm">
+                    <span className="px-2 text-[10px] text-muted-foreground bg-gray-50 border-r py-1 flex items-center">Rp</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={editingPrices[item.id] !== undefined ? editingPrices[item.id] : item.price.toLocaleString('id-ID')}
+                      onChange={e => {
+                        const val = e.target.value.replace(/\D/g, '');
+                        setEditingPrices(prev => ({ ...prev, [item.id]: val }));
+                        const newPrice = parseInt(val) || 0;
+                        setItemPrice(item.id, newPrice);
+                      }}
+                      onFocus={(e) => {
+                        (e.target as HTMLInputElement).select();
+                        setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+                      }}
+                      onBlur={() => {
+                        setEditingPrices(prev => {
+                          const next = { ...prev };
+                          delete next[item.id];
+                          return next;
+                        });
+                      }}
+                      className="w-20 px-1.5 py-1 text-right text-xs font-medium focus:ring-1 focus:ring-amber-400 focus:outline-none"
+                      aria-label="Ubah harga"
+                    />
+                  </div>
+                  <span className="text-[10px] text-gray-400 mx-1">x</span>
+                  <div className="flex items-center border rounded bg-white overflow-hidden shadow-sm">
+                    <span className="px-2 text-[10px] text-muted-foreground bg-gray-50 border-r py-1 flex items-center">Qty</span>
+                    <input
+                      type="number"
+                      value={editingQuantities[item.id] ?? item.quantity}
+                      onChange={(e) => {
+                        setEditingQuantities({ ...editingQuantities, [item.id]: e.target.value });
+                      }}
+                      onFocus={(e) => {
+                        (e.target as HTMLInputElement).select();
+                        setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+                      }}
+                      onBlur={() => handleQuantityBlur(item)}
+                      placeholder="0"
+                      className="w-10 px-1 py-1 text-center text-xs font-medium focus:ring-1 focus:ring-amber-400 focus:outline-none border-none"
+                    />
+                  </div>
                 </div>
                 {/* Row 3: Total + -/+ buttons (centered) */}
                 <div className="flex items-center mt-1.5">
@@ -348,18 +372,19 @@ const CartScreen = () => {
                     <Button
                       variant="outline"
                       size="icon"
-                      className="h-7 w-7 rounded-full border-amber-300 text-amber-500 hover:bg-amber-50"
+                      className="h-9 w-9 border-slate-300"
                       onClick={() => updateQuantity(item.id, Math.max(0, item.quantity - 1))}
+                      disabled={item.quantity === 0}
                     >
-                      <Minus className="h-3.5 w-3.5" />
+                      <Minus className="h-4 w-4 text-slate-600" />
                     </Button>
                     <Button
                       variant="outline"
                       size="icon"
-                      className="h-7 w-7 rounded-full border-amber-300 text-amber-500 hover:bg-amber-50"
+                      className="h-9 w-9 border-slate-300 bg-slate-50 hover:bg-amber-50 hover:border-amber-400 transition-colors"
                       onClick={() => updateQuantity(item.id, item.quantity + 1)}
                     >
-                      <Plus className="h-3.5 w-3.5" />
+                      <Plus className="h-4 w-4 text-slate-600" />
                     </Button>
                   </div>
                 </div>
@@ -536,21 +561,24 @@ const CartScreen = () => {
                   }
                   setPaymentError("");
                 }}
+                disabled={hasInvalidItems}
               >
                 <CreditCard className="h-4 w-4 mr-1" />
                 {isHutangMode ? "✓ Hutang" : "Hutang"}
               </Button>
             </div>
 
-            {paymentError && (
-              <div className="text-red-600 text-xs text-center">{paymentError}</div>
+            {(paymentError || hasInvalidItems) && (
+              <div className="text-red-600 text-xs text-center">
+                {hasInvalidItems ? "Ada item dengan harga atau qty 0. Hapus atau perbaiki dulu!" : paymentError}
+              </div>
             )}
 
             {/* Tombol Konfirmasi - aktif jika Uang Pas atau Hutang dipilih */}
             <Button
               className={`w-full h-11 text-base font-semibold ${(isUangPasSelected || isHutangMode) ? (isHutangMode ? "bg-red-500 hover:bg-red-600" : "bg-amber-600 hover:bg-amber-700") : "bg-gray-300 cursor-not-allowed"}`}
               onClick={isHutangMode ? () => setShowHutangDialog(true) : handleConfirmPayment}
-              disabled={!isUangPasSelected && !isHutangMode}
+              disabled={(!isUangPasSelected && !isHutangMode) || hasInvalidItems}
             >
               {isHutangMode ? "📝 Catat Hutang" : "✓ Konfirmasi Pembayaran"}
             </Button>

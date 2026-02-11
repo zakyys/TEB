@@ -31,7 +31,7 @@ const BottomNavBar = () => {
     },
     {
       icon: <History size={22} />,
-      label: "Tukar",
+      label: "History",
       path: "/history",
     },
     {

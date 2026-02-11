@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { Product } from "@/types/pos";
 import {
   getFromLS,
   saveToLS,
@@ -90,8 +91,12 @@ const ProfilePage = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [config, setConfig] = useState(getConfig());
   const [tempGasUrl, setTempGasUrl] = useState(config.gasUrl);
+  const [tempProductGasUrl, setTempProductGasUrl] = useState(config.productGasUrl);
   const [tempBotToken, setTempBotToken] = useState(config.telegramBotToken);
   const [tempChatId, setTempChatId] = useState(config.telegramChatId);
+  const [uploadingProducts, setUploadingProducts] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
+  const cancelUploadRef = useRef(false);
 
   // Historical sync states
   const [sendingHistorical, setSendingHistorical] = useState(false);
@@ -418,6 +423,7 @@ const ProfilePage = () => {
     const allVisitors = getFromLS<VisitorLog[]>(LS_KEYS.VISITORS_LOG, []);
     const allLost = getFromLS<VisitorLostLog[]>(LS_KEYS.VISITOR_LOST_LOG, []);
     const allExchanges = getFromLS<any[]>('bengkel_exchanges', []);
+    const allRefunds = getFromLS<any[]>('bengkel_refunds', []); // NEW: Collect Refunds
     const allNotes = getFromLS<any[]>('bengkel_notes', []);
 
     if (completedTransactions.length === 0 && allVisitors.length === 0) {
@@ -654,15 +660,12 @@ const ProfilePage = () => {
         total: item.total
       }));
 
-    // Format exchanges for recap
-    const monthlyExchanges = allExchanges.map(e => {
-      // Fallback: if originalPurchaseDate missing, find from transaction
+    // Format exchanges for recap (Legacy - mapping to monthlyRefunds format)
+    const monthlyExchangesFormatted = allExchanges.map(e => {
       let purchaseDate = e.originalPurchaseDate;
       if (!purchaseDate && e.originalTransactionId) {
         const originalTrx = allTransactions.find(t => t.id === e.originalTransactionId);
-        if (originalTrx) {
-          purchaseDate = originalTrx.date;
-        }
+        if (originalTrx) purchaseDate = originalTrx.date;
       }
 
       const exchangeDateStr = e.date ? new Date(e.date).toISOString().split('T')[0] : '';
@@ -670,31 +673,45 @@ const ProfilePage = () => {
 
       let tglBeli = '-';
       if (purchaseDate) {
-        if (purchaseDateStr === exchangeDateStr) {
-          tglBeli = 'Di hari yg sama';
-        } else {
-          tglBeli = new Date(purchaseDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
-        }
+        tglBeli = (purchaseDateStr === exchangeDateStr) ? 'Di hari yg sama' : new Date(purchaseDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
       }
-
-      // Format: (SKU) NAME
-      const originalSku = e.originalItem?.sku || '-';
-      const originalName = e.originalItem?.name || '';
-      const newSku = e.newItem?.sku || '-';
-      const newName = e.newItem?.name || '';
 
       return {
         date: new Date(e.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
         tglBeli: tglBeli,
-        barangLama: `(${originalSku}) ${originalName}`,
-        qtyLama: e.originalItem?.quantity || 1,
-        hargaLama: e.originalItem?.price || 0,
-        barangBaru: `(${newSku}) ${newName}`,
-        qtyBaru: e.newItem?.quantity || 1,
-        hargaBaru: e.newItem?.price || 0,
-        selisih: e.priceDifference || 0
+        kode: e.originalItem?.sku || '-',
+        nama: e.originalItem?.name || '-',
+        quantity: e.originalItem?.quantity || 1,
+        price: e.originalItem?.price || 0,
+        totalRefund: e.priceDifference || 0,
+        type: "EXCHANGE"
       };
     });
+
+    // Format refunds for recap
+    const monthlyRefundsFormatted = allRefunds.map(r => {
+      let pDate = r.originalPurchaseDate || r.purchaseDate;
+      const refundDateStr = r.date ? new Date(r.date).toISOString().split('T')[0] : '';
+      const pDateStr = pDate ? new Date(pDate).toISOString().split('T')[0] : '';
+
+      let tglBeli = '-';
+      if (pDate) {
+        tglBeli = (pDateStr === refundDateStr) ? 'Di hari yg sama' : new Date(pDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+      }
+
+      return {
+        date: new Date(r.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
+        tglBeli: tglBeli,
+        kode: r.item?.sku || r.kode || "-",
+        nama: r.item?.name || r.nama || "-",
+        quantity: r.item?.quantity || r.quantity || 1,
+        price: r.item?.price || r.price || 0,
+        totalRefund: r.total || 0,
+        type: "REFUND"
+      };
+    });
+
+    const combinedMonthlyRefunds = [...monthlyRefundsFormatted, ...monthlyExchangesFormatted];
 
     // Format notes for recap
     const monthlyNotes = allNotes.map(n => ({
@@ -718,7 +735,8 @@ const ProfilePage = () => {
           items: sortedMonthlyItems,
           dailyVisitors: dailyVisitorsList,
           allLostList: allLostListForRecap,
-          monthlyExchanges: monthlyExchanges,
+          monthlyRefunds: combinedMonthlyRefunds,
+          monthlyExchanges: monthlyExchangesFormatted,
           monthlyNotes: monthlyNotes
         })
       });
@@ -818,15 +836,7 @@ const ProfilePage = () => {
               {/* Cleanup buttons */}
               <div className="space-y-2">
                 <p className="text-sm font-medium">Hapus Transaksi Lama</p>
-                <div className="grid grid-cols-3 gap-2">
-                  <Button
-                    variant="outline"
-                    className="bg-cyan-50 hover:bg-cyan-100 border-cyan-200 text-cyan-700"
-                    onClick={() => { setArchiveDays(3); setShowArchiveConfirm(true); }}
-                  >
-                    <Trash2 className="h-4 w-4 mr-1" />
-                    &gt;3 hari
-                  </Button>
+                <div className="grid grid-cols-2 gap-2">
                   <Button
                     variant="outline"
                     className="bg-yellow-50 hover:bg-yellow-100 border-yellow-200 text-yellow-700"
@@ -927,13 +937,21 @@ const ProfilePage = () => {
               <div className="flex justify-between items-start mb-2">
                 <div>
                   <p className="text-sm font-bold text-blue-900">Konfigurasi Aktif:</p>
-                  <p className="text-[10px] text-blue-600 font-mono mt-1 break-all">GAS: {config.gasUrl}</p>
+                  <div className="space-y-1 mt-1">
+                    <p className="text-[10px] text-blue-600 font-mono break-all leading-tight">
+                      <span className="font-bold">UTAMA:</span> {config.gasUrl || '-'}
+                    </p>
+                    <p className="text-[10px] text-orange-600 font-mono break-all leading-tight">
+                      <span className="font-bold">PRODUK:</span> {config.productGasUrl || '(Sama dg utama)'}
+                    </p>
+                  </div>
                 </div>
               </div>
               <Button
                 onClick={() => {
                   const c = getConfig();
                   setTempGasUrl(c.gasUrl);
+                  setTempProductGasUrl(c.productGasUrl);
                   setTempBotToken(c.telegramBotToken);
                   setTempChatId(c.telegramChatId);
                   setSettingsOpen(true);
@@ -1024,7 +1042,7 @@ const ProfilePage = () => {
         {/* Version Info */}
         <div className="mt-8 mb-4 text-center">
           <p className="text-xs text-muted-foreground font-medium opacity-50">
-            APLIKASI TOKO BAUT - V4.0
+            APLIKASI TOKO BAUT - V10
           </p>
         </div>
       </div>
@@ -1193,6 +1211,120 @@ const ProfilePage = () => {
 
             <div className="space-y-2">
               <label className="text-sm font-bold flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                URL Spreadsheet Database Produk (Berbeda)
+              </label>
+              <div className="flex gap-2">
+                <Input
+                  value={tempProductGasUrl}
+                  onChange={(e) => setTempProductGasUrl(e.target.value)}
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  className="text-xs font-mono flex-1 border-orange-200 focus-visible:ring-orange-500"
+                  autoUppercase={false}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0 text-xs px-2 h-9 border-orange-200 text-orange-600"
+                  onClick={async () => {
+                    if (!tempProductGasUrl) return alert("Masukkan URL dulu");
+
+                    const urlLower = tempProductGasUrl.toLowerCase().trim();
+                    if (!urlLower.startsWith("https://script.google.com/macros/s/")) {
+                      return alert("❌ Format URL salah!");
+                    }
+                    if (!urlLower.endsWith("/exec")) {
+                      return alert("❌ URL bukan link deployment!");
+                    }
+
+                    try {
+                      // Mengirim perintah untuk setup sheet & header secara otomatis
+                      await fetch(tempProductGasUrl + "?action=setupProductSheet", { method: "GET", mode: "no-cors" });
+                      alert("✅ Koneksi Berhasil!\n\nSistem telah otomatis membuatkan Sheet 'Produk' dan menulis Header di Spreadsheet Anda.\n\nSilakan cek Spreadsheet Database Produk Anda!");
+                    } catch (e) {
+                      alert("❌ Gagal mengakses server Google.");
+                    }
+                  }}
+                >
+                  Cek
+                </Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground">Kosongkan jika sama dengan URL utama di atas.</p>
+
+              {/* Tombol Upload Semua Produk ke Sheet */}
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full mt-2 text-xs border-orange-300 text-orange-700 hover:bg-orange-50"
+                disabled={uploadingProducts}
+                onClick={async () => {
+                  // Tentukan URL target
+                  const targetUrl = (tempProductGasUrl || tempGasUrl || "").trim();
+                  if (!targetUrl) {
+                    return alert("❌ URL belum diisi! Isi URL Produk atau URL Utama dulu.");
+                  }
+
+                  // Ambil data produk dari localStorage
+                  const products: Product[] = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
+                  if (products.length === 0) {
+                    return alert("❌ Tidak ada data produk di aplikasi untuk di-upload.");
+                  }
+
+                  // Konfirmasi
+                  const confirmed = window.confirm(
+                    `⚠️ UPLOAD PRODUK KE SHEET\n\n` +
+                    `Akan mengirim ${products.length} produk SEKALIGUS ke Google Sheet.\n` +
+                    `Data yang sudah ada di Sheet akan di-update, produk baru akan ditambahkan.\n\n` +
+                    `Lanjutkan?`
+                  );
+                  if (!confirmed) return;
+
+                  setUploadingProducts(true);
+                  setUploadProgress(`Mengirim ${products.length} produk sekaligus...`);
+
+                  try {
+                    // Kirim semua produk dalam 1x request (BULK)
+                    const allProducts = products.map(p => ({
+                      kode: (p.sku || p.id || "").toUpperCase(),
+                      nama: p.name,
+                      hargaBeli: p.purchasePrice || 0,
+                      hargaJual: p.price,
+                      stok: p.stock || 0,
+                    }));
+
+                    await fetch(targetUrl, {
+                      method: "POST",
+                      mode: "no-cors",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        action: "bulkUpdateProducts",
+                        products: allProducts,
+                      }),
+                    });
+
+                    alert(
+                      `✅ Upload Selesai!\n\n` +
+                      `${products.length} produk berhasil dikirim ke Google Sheet.\n` +
+                      `\nSilakan cek Spreadsheet Database Produk Anda.`
+                    );
+                  } catch {
+                    alert("❌ Gagal mengirim data ke Google Sheet.");
+                  }
+
+                  setUploadingProducts(false);
+                  setUploadProgress("");
+                }}
+              >
+                {uploadingProducts ? (
+                  <>{uploadProgress}</>
+                ) : (
+                  <>📤 Upload Semua Produk ke Sheet ({getFromLS<Product[]>(LS_KEYS.PRODUCTS, []).length} produk)</>
+                )}
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-bold flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
                 Telegram Bot Token
               </label>
@@ -1331,10 +1463,12 @@ _Pesan ini dikirim untuk memverifikasi koneksi Telegram._`;
               onClick={() => {
                 if (confirm("Reset ke pengaturan default?")) {
                   localStorage.removeItem(LS_KEYS.GAS_URL);
+                  localStorage.removeItem(LS_KEYS.PRODUCT_GAS_URL);
                   localStorage.removeItem(LS_KEYS.TELEGRAM_BOT_TOKEN);
                   localStorage.removeItem(LS_KEYS.TELEGRAM_CHAT_ID);
                   const def = getConfig();
                   setTempGasUrl(def.gasUrl);
+                  setTempProductGasUrl(def.productGasUrl);
                   setTempBotToken(def.telegramBotToken);
                   setTempChatId(def.telegramChatId);
                   setConfig(def);
@@ -1350,6 +1484,7 @@ _Pesan ini dikirim untuk memverifikasi koneksi Telegram._`;
                 className="bg-blue-600 hover:bg-blue-700"
                 onClick={() => {
                   saveToLS(LS_KEYS.GAS_URL, tempGasUrl.trim());
+                  saveToLS(LS_KEYS.PRODUCT_GAS_URL, tempProductGasUrl.trim());
                   saveToLS(LS_KEYS.TELEGRAM_BOT_TOKEN, tempBotToken.trim());
                   saveToLS(LS_KEYS.TELEGRAM_CHAT_ID, tempChatId.trim());
                   setConfig(getConfig());

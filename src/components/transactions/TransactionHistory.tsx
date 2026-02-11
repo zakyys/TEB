@@ -19,7 +19,8 @@ import "jspdf-autotable";
 import { saveAs } from "file-saver";
 import { useToast } from "@/components/ui/use-toast";
 import { getDailyStatsInRange } from "@/lib/visitors";
-import { getExchanges, ExchangeRecord, addRefund, getRefunds, RefundRecord, addExchange, deleteExchange } from "@/lib/exchange";
+import { getExchanges, ExchangeRecord, addRefund, getRefunds, RefundRecord, addExchange, deleteExchange, deleteRefund } from "@/lib/exchange";
+import { getNotes, deleteNoteByTransactionId } from "@/lib/notes";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ProfileData } from "@/types/pos";
 
@@ -141,8 +142,18 @@ const TransactionHistory: React.FC = () => {
   // State for exchange delete confirmation
   const [exchangeToDelete, setExchangeToDelete] = useState<ExchangeRecord | null>(null);
 
+  // State for refund delete confirmation
+  const [refundToDelete, setRefundToDelete] = useState<RefundRecord | null>(null);
+
+  // State for refund confirmation
+  const [showRefundConfirm, setShowRefundConfirm] = useState(false);
+
   // State for highlighted exchange (from navigation)
   const [highlightedExchangeId, setHighlightedExchangeId] = useState<string | null>(null);
+  // State for flashing card after undo refund
+  const [flashingCard, setFlashingCard] = useState<{ transactionId: string; itemIndex: number } | null>(null);
+  // State for undo refund confirmation (simple: transactionId + itemIndex)
+  const [undoRefundConfirm, setUndoRefundConfirm] = useState<{ transactionId: string; itemIndex: number } | null>(null);
   const location = useLocation();
   const exchangeCardRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
 
@@ -373,19 +384,126 @@ const TransactionHistory: React.FC = () => {
   const deleteTransactionItem = async (transactionId: string, itemIndex: number) => {
     // Get the item to delete first to return stock
     const transaction = transactions.find(t => t.id === transactionId);
-    if (transaction) {
-      const itemToDelete = transaction.items[itemIndex];
-      if (itemToDelete) {
-        // Return stock
-        const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
-        const productIndex = products.findIndex(
-          p => p.sku === itemToDelete.sku || p.name === itemToDelete.name
+    if (!transaction) return;
+
+    const itemToDelete = transaction.items[itemIndex];
+    if (!itemToDelete) return;
+
+    // Check if this is a refunded item (undo refund scenario - any refund flag)
+    const isRefundedItem = (itemToDelete as any).sameDayRefunded || (itemToDelete as any).refunded || (itemToDelete as any).partiallyRefunded;
+
+    if (isRefundedItem) {
+      // UNDO REFUND: Merge qty back to original card (same SKU, not refunded)
+      const originalItemIndex = transaction.items.findIndex((it, idx) =>
+        idx !== itemIndex &&
+        it.sku === itemToDelete.sku &&
+        !(it as any).sameDayRefunded &&
+        !(it as any).refunded
+      );
+
+      let updatedTransactions: Transaction[];
+      let flashCardIndex = -1;
+
+      if (originalItemIndex !== -1) {
+        // Found original card - merge qty back
+        updatedTransactions = transactions.map(t => {
+          if (t.id !== transactionId) return t;
+
+          const newItems = t.items.map((it, idx) => {
+            if (idx === originalItemIndex) {
+              // Add qty from deleted refunded item to original
+              return { ...it, quantity: it.quantity + itemToDelete.quantity };
+            }
+            return it;
+          }).filter((_, idx) => idx !== itemIndex); // Remove the refunded card
+
+          // Recalculate total (exclude sameDayRefunded items)
+          const newTotal = newItems.reduce((sum, it) => {
+            if ((it as any).sameDayRefunded) return sum;
+            return sum + (it.price * it.quantity);
+          }, 0);
+
+          return { ...t, items: newItems, total: newTotal };
+        });
+
+        // Calculate new index for flash (account for removed item)
+        flashCardIndex = originalItemIndex > itemIndex ? originalItemIndex - 1 : originalItemIndex;
+      } else {
+        // No original card found - just remove the flag and keep item as normal
+        updatedTransactions = transactions.map(t => {
+          if (t.id !== transactionId) return t;
+
+          const newItems = t.items.map((it, idx) => {
+            if (idx === itemIndex) {
+              // Remove ALL refund flags, item becomes normal
+              const { sameDayRefunded, refundedQty, refunded, partiallyRefunded, ...cleanItem } = it as any;
+              return cleanItem;
+            }
+            return it;
+          });
+
+          // Recalculate total
+          const newTotal = newItems.reduce((sum, it) => {
+            if ((it as any).sameDayRefunded) return sum;
+            return sum + (it.price * it.quantity);
+          }, 0);
+
+          return { ...t, items: newItems, total: newTotal };
+        });
+
+        flashCardIndex = itemIndex;
+      }
+
+      setTransactions(updatedTransactions);
+      safeSaveAllTransactions(updatedTransactions);
+
+      // If this was a different-day refund, also delete the refund record and reduce stock
+      if ((itemToDelete as any).refunded && !(itemToDelete as any).sameDayRefunded) {
+        // Find and delete refund record matching this item
+        const refunds = getRefunds();
+        const matchingRefund = refunds.find(r =>
+          r.transactionId === transactionId &&
+          r.item.sku === itemToDelete.sku
         );
+
+        if (matchingRefund) {
+          deleteRefund(matchingRefund.id);
+          setRefundHistory(getRefunds()); // Refresh list
+        }
+
+        // Reduce stock (refund was returned, now we're undoing it)
+        const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
+        const productIndex = products.findIndex(p => p.sku === itemToDelete.sku || p.name === itemToDelete.name);
         if (productIndex !== -1 && products[productIndex].stock !== undefined) {
-          products[productIndex].stock += itemToDelete.quantity || 1;
+          products[productIndex].stock -= itemToDelete.quantity || 1;
           saveToLS(LS_KEYS.PRODUCTS, products);
         }
       }
+
+      // Trigger flash animation
+      if (flashCardIndex !== -1) {
+        setFlashingCard({ transactionId, itemIndex: flashCardIndex });
+        setTimeout(() => setFlashingCard(null), 2000); // Flash for 2 seconds
+      }
+
+      setDeleteConfirm(null);
+      toast({
+        title: "Refund Dibatalkan",
+        description: `${itemToDelete.quantity} pcs dikembalikan ke item asli`,
+        variant: "default"
+      });
+      return;
+    }
+
+    // Normal delete flow (not refunded item)
+    // Return stock
+    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
+    const productIndex = products.findIndex(
+      p => p.sku === itemToDelete.sku || p.name === itemToDelete.name
+    );
+    if (productIndex !== -1 && products[productIndex].stock !== undefined) {
+      products[productIndex].stock += itemToDelete.quantity || 1;
+      saveToLS(LS_KEYS.PRODUCTS, products);
     }
 
     const updatedTransactions = transactions.map(t => {
@@ -393,6 +511,8 @@ const TransactionHistory: React.FC = () => {
         const newItems = t.items.filter((_, idx) => idx !== itemIndex);
         // If no items left, remove entire transaction
         if (newItems.length === 0) {
+          // Jika transaksi dihapus, hapus juga catatan hutang yang terkait jika ada
+          deleteNoteByTransactionId(transactionId);
           return null;
         }
         // Recalculate total
@@ -475,30 +595,39 @@ const TransactionHistory: React.FC = () => {
     const validIndex = selectedItemIndex !== null && selectedItemIndex >= 0 && selectedItemIndex < selectedTransaction.items.length;
     const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
 
+    // Check if same day refund (once for entire function)
+    const refundDate = new Date().toISOString().split('T')[0];
+    const purchaseDate = selectedTransaction.date.split('T')[0];
+    const isSameDayRefund = refundDate === purchaseDate;
+
     if (validIndex) {
       // Partial return: remove or reduce the selected item based on returnQuantity
       const item = selectedTransaction.items[selectedItemIndex!];
       const qtyToReturn = Math.min(returnQuantity, item.quantity); // Qty yang akan di-refund
       const deduct = item.price * qtyToReturn;
 
-      // Log the refund
+      // Get SKU once
       let sku = item.sku;
       if (!sku) {
         const prod = products.find(p => p.name === item.name);
         sku = prod?.sku || '-';
       }
-      addRefund({
-        date: new Date().toISOString(),
-        item: {
-          sku,
-          name: item.name,
-          quantity: qtyToReturn,
-          price: item.price
-        },
-        total: deduct,
-        transactionId: trxId,
-        originalPurchaseDate: selectedTransaction.date
-      });
+
+      // Only log refund if different day (same day = cancel, no tracking needed)
+      if (!isSameDayRefund) {
+        addRefund({
+          date: new Date().toISOString(),
+          item: {
+            sku,
+            name: item.name,
+            quantity: qtyToReturn,
+            price: item.price
+          },
+          total: deduct,
+          transactionId: trxId,
+          originalPurchaseDate: selectedTransaction.date
+        });
+      }
 
       // Update stock (return item) - only for qtyToReturn
       const updatedProducts = products.map(p => {
@@ -510,25 +639,76 @@ const TransactionHistory: React.FC = () => {
       localStorage.setItem(LS_KEYS.PRODUCTS, JSON.stringify(updatedProducts));
       window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
 
-      const updated = transactions.map(t => {
-        if (t.id !== trxId) return t;
-        let newItems = [...t.items];
-        const remainingQty = item.quantity - qtyToReturn;
+      // Smart refund logic (already checked at function start)
+      if (isSameDayRefund) {
+        // Same day: Mark item as refunded or split for partial refund
+        const updated = transactions.map(t => {
+          if (t.id !== trxId) return t;
+          let newItems = [...t.items];
+          const remainingQty = item.quantity - qtyToReturn;
 
-        if (remainingQty <= 0) {
-          // Remove item completely if all qty refunded
-          newItems = newItems.filter((_, i) => i !== selectedItemIndex);
-        } else {
-          // Reduce qty if partial refund
-          newItems[selectedItemIndex!] = { ...item, quantity: remainingQty };
-        }
+          if (remainingQty <= 0) {
+            // Full refund: Mark item as fully refunded (same day)
+            newItems[selectedItemIndex!] = { ...item, sameDayRefunded: true, refundedQty: qtyToReturn };
+          } else {
+            // Partial refund: SPLIT into 2 cards
+            // 1. Update original card with remaining qty (normal)
+            newItems[selectedItemIndex!] = { ...item, quantity: remainingQty };
 
-        const newTotal = newItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
-        const newStatus = newItems.length === 0 ? ("refunded" as const) : t.status;
-        return { ...t, items: newItems, total: newTotal, status: newStatus };
-      });
-      setTransactions(updated);
-      safeSaveAllTransactions(updated);
+            // 2. Add new card for refunded qty (red card)
+            const refundedCard = {
+              ...item,
+              quantity: qtyToReturn,
+              sameDayRefunded: true,
+              refundedQty: qtyToReturn
+            };
+            // Insert refunded card right after the original
+            newItems.splice(selectedItemIndex! + 1, 0, refundedCard);
+          }
+
+          // Recalculate transaction total (exclude sameDayRefunded items)
+          const newTotal = newItems.reduce((sum, it) => {
+            if ((it as any).sameDayRefunded) return sum; // Exclude refunded items from total
+            return sum + (it.price * it.quantity);
+          }, 0);
+
+          return { ...t, items: newItems, total: newTotal };
+        });
+        setTransactions(updated);
+        safeSaveAllTransactions(updated);
+      } else {
+        // Different day: Mark item as refunded or split for partial refund
+        const updated = transactions.map(t => {
+          if (t.id !== trxId) return t;
+          let newItems = [...t.items];
+          const remainingQty = item.quantity - qtyToReturn;
+          const refundDateStr = new Date().toISOString(); // Store refund date
+
+          if (remainingQty <= 0) {
+            // Full refund: Mark item as fully refunded
+            newItems[selectedItemIndex!] = { ...item, refunded: true, refundedQty: qtyToReturn, refundDate: refundDateStr };
+          } else {
+            // Partial refund: SPLIT into 2 cards (like same-day)
+            // 1. Update original card with remaining qty (normal)
+            newItems[selectedItemIndex!] = { ...item, quantity: remainingQty };
+
+            // 2. Add new card for refunded qty (red card)
+            const refundedCard = {
+              ...item,
+              quantity: qtyToReturn,
+              refunded: true,
+              refundedQty: qtyToReturn,
+              refundDate: refundDateStr
+            };
+            // Insert refunded card right after the original
+            newItems.splice(selectedItemIndex! + 1, 0, refundedCard);
+          }
+
+          return { ...t, items: newItems };
+        });
+        setTransactions(updated);
+        safeSaveAllTransactions(updated);
+      }
 
       setIsDialogOpen(false);
       setSelectedItemIndex(null);
@@ -539,25 +719,29 @@ const TransactionHistory: React.FC = () => {
         description: `${qtyToReturn} pcs ${item.name} berhasil di-refund. Stok +${qtyToReturn}`,
       });
     } else {
-      // Full transaction refund - log all items
+      // Full transaction refund (already checked at function start)
       selectedTransaction.items.forEach(item => {
         let sku = item.sku;
         if (!sku) {
           const prod = products.find(p => p.name === item.name);
           sku = prod?.sku || '-';
         }
-        addRefund({
-          date: new Date().toISOString(),
-          item: {
-            sku,
-            name: item.name,
-            quantity: item.quantity,
-            price: item.price
-          },
-          total: item.price * item.quantity,
-          transactionId: trxId,
-          originalPurchaseDate: selectedTransaction.date
-        });
+
+        // Only log refund if different day
+        if (!isSameDayRefund) {
+          addRefund({
+            date: new Date().toISOString(),
+            item: {
+              sku,
+              name: item.name,
+              quantity: item.quantity,
+              price: item.price
+            },
+            total: item.price * item.quantity,
+            transactionId: trxId,
+            originalPurchaseDate: selectedTransaction.date
+          });
+        }
 
         // Update stock
         const currentProducts = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
@@ -570,9 +754,26 @@ const TransactionHistory: React.FC = () => {
         localStorage.setItem(LS_KEYS.PRODUCTS, JSON.stringify(updatedProducts));
       });
 
-      const updated = transactions.map(t => t.id === trxId ? { ...t, status: "refunded" as const } : t);
-      setTransactions(updated);
-      safeSaveAllTransactions(updated);
+      // Smart refund logic for full refund (already checked at function start)
+      if (isSameDayRefund) {
+        // Same day: Mark all items as refunded (same day)
+        const updated = transactions.map(t => {
+          if (t.id !== trxId) return t;
+          const newItems = t.items.map(item => ({ ...item, sameDayRefunded: true, refundedQty: item.quantity }));
+          return { ...t, items: newItems };
+        });
+        setTransactions(updated);
+        safeSaveAllTransactions(updated);
+      } else {
+        // Different day: Mark all items as refunded
+        const updated = transactions.map(t => {
+          if (t.id !== trxId) return t;
+          const newItems = t.items.map(item => ({ ...item, refunded: true, refundedQty: item.quantity }));
+          return { ...t, items: newItems };
+        });
+        setTransactions(updated);
+        safeSaveAllTransactions(updated);
+      }
 
       setIsDialogOpen(false);
     }
@@ -608,6 +809,7 @@ const TransactionHistory: React.FC = () => {
   // Handle refund only (no exchange)
   const handleRefundOnly = () => {
     setShowExchangeOptions(false);
+    setShowRefundConfirm(false);
     createReturnTransaction();
   };
 
@@ -701,18 +903,20 @@ const TransactionHistory: React.FC = () => {
       return { ...t, items: newItems, total: totalAmount };
     });
 
-    // 2. Create NEW transaction ONLY if there's a positive price difference (selisih > 0)
-    // This represents the ACTUAL CASH that came in today
+    // 2. Create NEW transaction for price difference (selisih)
+    // This represents the ACTUAL CASH change today:
+    // - Positive: customer pays extra (kas masuk)
+    // - Negative: store gives refund (kas keluar)
     let finalTransactions = [...updatedOriginal];
 
-    if (priceDiff > 0) {
-      // Customer pays extra - record as adjustment (NOT as regular sale)
-      // Use ADJ- prefix and "Tukar Barang" customer so it gets filtered from PENJUALAN HARI INI
+    if (priceDiff !== 0) {
+      // Record adjustment transaction for any non-zero difference
+      // Use EX- prefix for exchange items
       const newTransaction: Transaction = {
         id: `ADJ-${Date.now().toString().substring(6)}`,
         date: new Date().toISOString(), // TODAY's date
         customer: 'Tukar Barang', // Mark as exchange
-        total: priceDiff, // ONLY the selisih (cash received today)
+        total: priceDiff, // The selisih (can be positive or negative)
         status: 'completed',
         items: [{
           name: `Selisih Tukar: ${oldItem.name} → ${selectedNewProduct.name}`,
@@ -724,8 +928,7 @@ const TransactionHistory: React.FC = () => {
       };
       finalTransactions = [...updatedOriginal, newTransaction];
     }
-    // Note: If priceDiff <= 0, no extra cash came in (customer gets refund or even exchange)
-    // We don't create a transaction for negative selisih (that would be handled separately)
+    // Note: If priceDiff === 0, no cash change, no adjustment transaction needed
 
     setTransactions(finalTransactions);
     await safeSaveAllTransactions(finalTransactions);
@@ -835,7 +1038,7 @@ const TransactionHistory: React.FC = () => {
     window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
 
     // 2. Find and DELETE the new transaction (created on exchange date for new item)
-    // The new transaction should have the new item with matching qty, created around exchange date
+    // AND also delete the Selisih Tukar adjustment transaction (ADJ- with EX- item)
     const exchangeDate = new Date(exchange.date).toISOString().split('T')[0];
 
     let updatedTransactions = transactions.filter(t => {
@@ -850,6 +1053,18 @@ const TransactionHistory: React.FC = () => {
         // This is the exchange transaction, remove it
         return false;
       }
+
+      // Also check for Selisih Tukar adjustment transaction (ADJ- transactions with "Selisih Tukar:" item)
+      // Match by checking if the item name contains both original and new item names
+      if (t.id.startsWith('ADJ-') && t.items.length === 1 && t.items[0].name.startsWith('Selisih Tukar:')) {
+        // Check if this Selisih Tukar matches our exchange (item names should be included)
+        const selisihName = t.items[0].name;
+        if (selisihName.includes(exchange.originalItem.name) && selisihName.includes(exchange.newItem.name)) {
+          // This is the Selisih Tukar transaction for this exchange, remove it
+          return false;
+        }
+      }
+
       return true;
     });
 
@@ -899,6 +1114,36 @@ const TransactionHistory: React.FC = () => {
     setExchangeToDelete(null);
   };
 
+  // Handle delete refund - remove refund record and restore stock
+  const handleDeleteRefund = (refund: RefundRecord) => {
+    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+
+    // Restore stock: subtract the refunded quantity (because refund added it back)
+    const updatedProducts = products.map(p => {
+      if (p.sku === refund.item.sku && p.stock !== undefined) {
+        return { ...p, stock: p.stock - refund.item.quantity };
+      }
+      return p;
+    });
+    saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+    window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
+
+    // Delete the refund record
+    deleteRefund(refund.id);
+
+    // Refresh refund history
+    setRefundHistory(getRefunds());
+
+    // Close dialog
+    setRefundToDelete(null);
+
+    toast({
+      title: "Refund Dibatalkan",
+      description: `${refund.item.name} (${refund.item.quantity} pcs) - Stok dikurangi kembali`,
+      variant: "default"
+    });
+  };
+
 
   return (
     <div className="bg-background h-screen flex flex-col overflow-hidden">
@@ -938,7 +1183,7 @@ const TransactionHistory: React.FC = () => {
           <TabsList className="flex gap-2 mb-4 bg-transparent p-0 shrink-0">
             <TabsTrigger value="completed" className="flex-1 py-3 px-4 text-sm font-semibold text-gray-500 bg-white border border-gray-200 rounded-xl transition-all duration-200 data-[state=active]:bg-gradient-to-r data-[state=active]:from-violet-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:shadow-purple-500/30 data-[state=active]:scale-[1.02] hover:border-purple-300 hover:text-purple-600">Terjual</TabsTrigger>
             <TabsTrigger value="all" className="flex-1 py-3 px-4 text-sm font-semibold text-gray-500 bg-white border border-gray-200 rounded-xl transition-all duration-200 data-[state=active]:bg-gradient-to-r data-[state=active]:from-violet-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:shadow-purple-500/30 data-[state=active]:scale-[1.02] hover:border-purple-300 hover:text-purple-600">Transaksi</TabsTrigger>
-            <TabsTrigger value="history" className="flex-1 py-3 px-4 text-sm font-semibold text-gray-500 bg-white border border-gray-200 rounded-xl transition-all duration-200 data-[state=active]:bg-gradient-to-r data-[state=active]:from-violet-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:shadow-purple-500/30 data-[state=active]:scale-[1.02] hover:border-purple-300 hover:text-purple-600">Tukar</TabsTrigger>
+            <TabsTrigger value="history" className="flex-1 py-3 px-4 text-sm font-semibold text-gray-500 bg-white border border-gray-200 rounded-xl transition-all duration-200 data-[state=active]:bg-gradient-to-r data-[state=active]:from-violet-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:shadow-purple-500/30 data-[state=active]:scale-[1.02] hover:border-purple-300 hover:text-purple-600">History</TabsTrigger>
           </TabsList>
 
           <div className="flex-1 overflow-y-auto pb-16 px-0.5">
@@ -1123,55 +1368,147 @@ const TransactionHistory: React.FC = () => {
                       {paginatedItems.map(({ transaction, item, itemIndex }) => {
                         const sku = item.sku || products.find((p: any) => p.name === item.name)?.sku || "-";
                         const isDeleting = deleteConfirm?.transactionId === transaction.id && deleteConfirm?.itemIndex === itemIndex;
+                        const isSelisihTukar = item.name.startsWith("Selisih Tukar:");
+                        const isSelisihPositif = isSelisihTukar && item.price > 0;
+                        const isSelisihNegatif = isSelisihTukar && item.price < 0;
+
+                        // Card colors: Green for positive selisih, Red for negative selisih
+                        const getCardClass = () => {
+                          if (isSelisihPositif) return 'bg-gradient-to-br from-emerald-50 to-green-50 border-emerald-200 dark:from-emerald-950/30 dark:to-green-950/30 dark:border-emerald-800';
+                          if (isSelisihNegatif) return 'bg-gradient-to-br from-red-50 to-rose-50 border-red-200 dark:from-red-950/30 dark:to-rose-950/30 dark:border-red-800';
+                          return '';
+                        };
+
+                        const getTextClass = () => {
+                          if (isSelisihPositif) return 'text-emerald-600 dark:text-emerald-400';
+                          if (isSelisihNegatif) return 'text-red-600 dark:text-red-400';
+                          return 'text-muted-foreground';
+                        };
+
+                        const getIconClass = () => {
+                          if (isSelisihPositif) return 'text-emerald-500';
+                          if (isSelisihNegatif) return 'text-red-500';
+                          return 'text-blue-500';
+                        };
+
+                        const getNameClass = () => {
+                          if (isSelisihPositif) return 'text-emerald-700 dark:text-emerald-300';
+                          if (isSelisihNegatif) return 'text-red-700 dark:text-red-300';
+                          return '';
+                        };
+
+                        const getPriceClass = () => {
+                          if (isSelisihPositif) return 'text-emerald-600 dark:text-emerald-400';
+                          if (isSelisihNegatif) return 'text-red-600 dark:text-red-400';
+                          return 'text-amber-600';
+                        };
+
+                        // Check if this card should be flashing
+                        const isFlashing = flashingCard?.transactionId === transaction.id && flashingCard?.itemIndex === itemIndex;
 
                         return (
                           <Card
                             key={`${transaction.id}-${itemIndex}`}
-                            className="hover:border-primary transition-colors"
+                            className={`hover:border-primary transition-colors ${(item as any).refunded || (item as any).partiallyRefunded || (item as any).sameDayRefunded
+                              ? 'bg-red-50 border-red-200'
+                              : getCardClass()
+                              } ${isFlashing ? 'animate-pulse ring-2 ring-green-500 ring-offset-2' : ''}`}
                           >
                             <CardContent className="p-3">
                               <div className="flex gap-2">
                                 {/* Left side - product info */}
                                 <div className="flex-1 min-w-0">
                                   {/* Tanggal pembelian */}
-                                  <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-1">
-                                    <Calendar className="h-3.5 w-3.5 text-blue-500" />
-                                    <span>Tanggal Beli: {new Date(transaction.date).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</span>
+                                  <div className={`flex items-center gap-1 text-[10px] mb-1 ${getTextClass()}`}>
+                                    <Calendar className={`h-3.5 w-3.5 ${getIconClass()}`} />
+                                    <span>{isSelisihTukar ? 'Tanggal Tukar' : 'Tanggal Beli'}: {new Date(transaction.date).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</span>
                                   </div>
-                                  <div className="font-medium text-sm leading-tight break-words">{item.name}</div>
-                                  <div className="text-xs text-muted-foreground mt-1">
+                                  <div className={`font-medium text-sm leading-tight break-words ${getNameClass()}`}>
+                                    {item.name}
+                                    {(item as any).sameDayRefunded && <span className="ml-2 text-red-600 font-bold">(Refunded - Dihari yang sama)</span>}
+                                    {(item as any).refunded && <span className="ml-2 text-red-600 font-bold">(Refunded{(item as any).refundDate ? ` - ${new Date((item as any).refundDate).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}` : ''})</span>}
+                                    {(item as any).partiallyRefunded && <span className="ml-2 text-orange-600 font-bold">(Partial Refund)</span>}
+                                  </div>
+                                  <div className={`text-xs mt-1 ${isSelisihTukar ? getTextClass() + '/70' : 'text-muted-foreground'}`}>
                                     {item.quantity} x {formatCurrency(item.price)}
                                   </div>
                                   <div className="flex items-center gap-2 mt-1">
-                                    <span className="font-semibold text-amber-600">{formatCurrency(item.price * item.quantity)}</span>
-                                    {/* Tombol Tukar di tengah dengan kotak */}
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-8 px-4 ml-auto text-sm font-medium text-purple-600 border-purple-300 hover:text-purple-800 hover:bg-purple-50 hover:border-purple-400"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setSelectedTransaction(transaction);
-                                        setSelectedItemIndex(itemIndex);
-                                        setExchangeItemToReturn({ item, index: itemIndex });
-                                        setExchangeQuantity(1); // Default ke 1 untuk barang baru
-                                        setReturnQuantity(1); // Default ke 1 untuk qty yang akan dikembalikan
-                                        setShowExchangeOptions(true);
-                                      }}
-                                    >
-                                      <RefreshCw className="h-4 w-4 mr-1.5" />
-                                      Tukar
-                                    </Button>
+                                    <span className={`font-semibold ${(item as any).refunded || (item as any).partiallyRefunded || (item as any).sameDayRefunded
+                                      ? 'text-red-600 line-through'
+                                      : getPriceClass()
+                                      }`}>
+                                      {isSelisihNegatif ? '' : ''}{formatCurrency(item.price * item.quantity)}
+                                    </span>
+                                    {/* Tombol Refund - Exchange feature disabled, disabled if already refunded */}
+                                    {!isSelisihTukar && !(item as any).refunded && !(item as any).partiallyRefunded && !(item as any).sameDayRefunded && !(item as any).sameDayPartialRefund && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-8 px-4 ml-auto text-sm font-medium text-red-600 border-red-300 hover:text-red-800 hover:bg-red-50 hover:border-red-400"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSelectedTransaction(transaction);
+                                          setSelectedItemIndex(itemIndex);
+                                          setExchangeItemToReturn({ item, index: itemIndex });
+                                          setReturnQuantity(1); // Default ke 1 untuk qty yang akan dikembalikan
+                                          // Show confirmation dialog first
+                                          setShowRefundConfirm(true);
+                                        }}
+                                      >
+                                        <RotateCcw className="h-4 w-4 mr-1.5" />
+                                        Refund
+                                      </Button>
+                                    )}
+                                    {/* Tombol Batalkan Refund - untuk card yang sudah di-refund (any refund flag) */}
+                                    {((item as any).sameDayRefunded || (item as any).refunded || (item as any).partiallyRefunded) && (
+                                      undoRefundConfirm?.transactionId === transaction.id && undoRefundConfirm?.itemIndex === itemIndex ? (
+                                        // Confirm state - show "Yakin?" button
+                                        <Button
+                                          size="sm"
+                                          variant="default"
+                                          className="h-8 px-4 ml-auto text-sm font-medium bg-green-600 hover:bg-green-700 text-white"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            deleteTransactionItem(transaction.id, itemIndex);
+                                            setUndoRefundConfirm(null);
+                                          }}
+                                        >
+                                          Yakin Batalkan?
+                                        </Button>
+                                      ) : (
+                                        // Normal state - show "Batalkan Refund" button
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-8 px-4 ml-auto text-sm font-medium text-green-600 border-green-300 hover:text-green-800 hover:bg-green-50 hover:border-green-400"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setUndoRefundConfirm({ transactionId: transaction.id, itemIndex });
+                                          }}
+                                        >
+                                          <RotateCcw className="h-4 w-4 mr-1.5" />
+                                          Batalkan Refund
+                                        </Button>
+                                      )
+                                    )}
                                   </div>
                                 </div>
                                 {/* Right side - SKU + action buttons */}
                                 <div className="flex flex-col items-end gap-2 flex-shrink-0">
                                   {/* SKU badge */}
-                                  <div className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                                  <div className="text-[10px] px-2 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200">
                                     {sku}
                                   </div>
-                                  {/* Action buttons - Edit & Delete */}
-                                  {editingItem?.transactionId === transaction.id && editingItem?.itemIndex === itemIndex ? (
+                                  {/* Action buttons - Edit & Delete (hidden for Selisih Tukar items and refunded items) */}
+                                  {isSelisihTukar ? (
+                                    // Show info text instead of edit/delete buttons
+                                    <div className={`text-[9px] text-right italic ${isSelisihPositif ? 'text-emerald-500' : 'text-red-500'}`}>
+                                      Batalkan di tab History
+                                    </div>
+                                  ) : ((item as any).sameDayRefunded || (item as any).refunded || (item as any).partiallyRefunded) ? (
+                                    // Refunded item - no edit/delete buttons (use Batalkan Refund button instead)
+                                    null
+                                  ) : editingItem?.transactionId === transaction.id && editingItem?.itemIndex === itemIndex ? (
                                     <div className="flex items-center gap-1">
                                       <Button
                                         size="sm"
@@ -1343,14 +1680,15 @@ const TransactionHistory: React.FC = () => {
                   );
                 });
 
+                // Exchange feature disabled - only show refunds
                 const allActivity = [
-                  ...filteredExchanges.map(ex => {
-                    const relevance = Math.max(
-                      getSearchRelevance(ex.originalItem.sku, searchQuery),
-                      getSearchRelevance(ex.newItem.sku, searchQuery)
-                    );
-                    return { type: 'exchange', data: ex, date: ex.date, relevance };
-                  }),
+                  // ...filteredExchanges.map(ex => {
+                  //   const relevance = Math.max(
+                  //     getSearchRelevance(ex.originalItem.sku, searchQuery),
+                  //     getSearchRelevance(ex.newItem.sku, searchQuery)
+                  //   );
+                  //   return { type: 'exchange', data: ex, date: ex.date, relevance };
+                  // }),
                   ...filteredRefunds.map(rf => {
                     const relevance = getSearchRelevance(rf.item.sku, searchQuery);
                     return { type: 'refund', data: rf, date: rf.date, relevance };
@@ -1399,7 +1737,10 @@ const TransactionHistory: React.FC = () => {
                                       <div className="space-y-0.5">
                                         <div className="text-[9px] text-red-600 font-bold uppercase">Dikembalikan</div>
                                         <div className="text-xs font-semibold leading-tight line-clamp-2">{ex.originalItem.name}</div>
-                                        <div className="text-[10px] text-muted-foreground">{ex.originalItem.quantity} pcs</div>
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="text-[10px] text-muted-foreground">{ex.originalItem.quantity} pcs</span>
+                                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200 uppercase">{ex.originalItem.sku || '-'}</span>
+                                        </div>
                                         {/* Tanggal Beli */}
                                         <div className="text-[9px] text-blue-600 mt-1 flex items-center gap-1">
                                           {(() => {
@@ -1417,7 +1758,10 @@ const TransactionHistory: React.FC = () => {
                                       <div className="space-y-0.5 text-right">
                                         <div className="text-[9px] text-green-600 font-bold uppercase">Ditukar</div>
                                         <div className="text-xs font-semibold leading-tight line-clamp-2">{ex.newItem.name}</div>
-                                        <div className="text-[10px] text-muted-foreground">{ex.newItem.quantity} pcs</div>
+                                        <div className="flex items-center justify-end gap-1.5">
+                                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200 uppercase">{ex.newItem.sku || '-'}</span>
+                                          <span className="text-[10px] text-muted-foreground">{ex.newItem.quantity} pcs</span>
+                                        </div>
                                       </div>
                                     </div>
 
@@ -1450,33 +1794,49 @@ const TransactionHistory: React.FC = () => {
                             } else {
                               const rf = item.data as RefundRecord;
                               return (
-                                <Card key={rf.id} className="overflow-hidden border-l-4 border-l-red-500 shadow-sm">
+                                <Card key={rf.id} className="overflow-hidden border-l-4 border-l-purple-500 shadow-sm">
                                   <CardContent className="p-3 sm:p-4">
+                                    {/* Header with status on left and purchase date on right */}
                                     <div className="flex justify-between items-start mb-3">
-                                      <div className="text-xs text-muted-foreground font-medium flex items-center gap-1">
-                                        <RotateCcw className="h-3 w-3" /> Refund: {new Date(rf.date).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' })}
+                                      {/* Left: Status with date */}
+                                      <div className="flex items-center gap-1.5">
+                                        <RotateCcw className="h-3.5 w-3.5 text-red-600" />
+                                        <span className="text-xs font-semibold text-red-600 uppercase">DIKEMBALIKAN</span>
+                                        <span className="text-xs text-muted-foreground">
+                                          {new Date(rf.date).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' })}
+                                        </span>
                                       </div>
-                                      <div className="text-[9px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground uppercase">
-                                        {rf.id}
-                                      </div>
+                                      {/* Right: Tanggal Beli */}
+                                      {rf.originalPurchaseDate && (
+                                        <div className="text-[10px] text-blue-600 flex items-center gap-1">
+                                          <Calendar className="h-3 w-3" />
+                                          <span>Tanggal Beli: {new Date(rf.originalPurchaseDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                                        </div>
+                                      )}
                                     </div>
 
-                                    <div className="flex gap-3 items-center">
-                                      <div className="h-9 w-9 rounded-full bg-red-100 flex items-center justify-center shrink-0">
-                                        <RotateCcw className="h-4 w-4 text-red-600" />
-                                      </div>
-                                      <div className="flex-1 min-w-0">
-                                        <div className="text-xs font-bold leading-tight line-clamp-1">{rf.item.name}</div>
-                                        <div className="text-[10px] text-muted-foreground">
-                                          {rf.item.quantity} pcs x {formatCurrency(rf.item.price)}
-                                        </div>
-                                      </div>
-                                      <div className="text-right">
-                                        <div className="text-[9px] text-muted-foreground uppercase font-bold">Total</div>
-                                        <div className="text-xs font-bold text-red-600">
-                                          -{formatCurrency(rf.total)}
-                                        </div>
-                                      </div>
+                                    {/* Product name - smaller font size */}
+                                    <div className="text-sm font-bold leading-tight mb-2">{rf.item.name}</div>
+
+                                    {/* Quantity and SKU in inline badges */}
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs text-blue-600 font-semibold">{rf.item.quantity} pcs</span>
+                                      <span className="text-[10px] px-2 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200 uppercase">
+                                        {rf.item.sku || 'N/A'}
+                                      </span>
+                                    </div>
+
+                                    {/* Footer with Batalkan button only */}
+                                    <div className="mt-3 flex justify-end">
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-7 px-3 text-xs text-red-500 hover:text-red-700 hover:bg-red-50 gap-1.5 font-medium"
+                                        onClick={() => setRefundToDelete(rf)}
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                        Batalkan
+                                      </Button>
                                     </div>
                                   </CardContent>
                                 </Card>
@@ -1533,7 +1893,7 @@ const TransactionHistory: React.FC = () => {
                     ) : (
                       <div className="py-12 text-center text-muted-foreground border rounded-xl bg-muted/10 flex flex-col items-center gap-2">
                         <RotateCcw className="h-8 w-8 opacity-20" />
-                        <div className="font-medium">Tidak ada riwayat tukar atau refund</div>
+                        <div className="font-medium">Tidak ada riwayat refund</div>
                         <div className="text-xs">Ubah filter tanggal untuk mencari data lain</div>
                       </div>
                     )}
@@ -1619,7 +1979,11 @@ const TransactionHistory: React.FC = () => {
                         <div key={index} className="flex justify-between">
                           <div>
                             <p>{item.name}</p>
-                            <p className="text-xs text-muted-foreground">SKU: {sku}</p>
+                            <div className="mt-1">
+                              <span className="text-[9px] px-1.5 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200 uppercase">
+                                {sku}
+                              </span>
+                            </div>
                             <p className="text-sm text-muted-foreground">{item.quantity} x {formatCurrency(item.price)}<Badge variant="outline" className="ml-2 text-xs">{item.type === 'product' ? 'Produk' : 'Jasa'}</Badge></p>
                           </div>
                           <p className="font-medium">{formatCurrency(item.quantity * item.price)}</p>
@@ -1767,7 +2131,7 @@ const TransactionHistory: React.FC = () => {
                       sku = prod?.sku || '-';
                     }
                     return (
-                      <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-gray-200 text-gray-800 border border-gray-300 shrink-0">
+                      <span className="text-[10px] px-2 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200 uppercase">
                         {sku}
                       </span>
                     );
@@ -1924,7 +2288,7 @@ const TransactionHistory: React.FC = () => {
                               </div>
                             )}
                             {product.sku && (
-                              <div className="text-xs text-slate-600 border border-slate-300 px-2 py-0.5 rounded bg-white">
+                              <div className="text-[10px] px-2 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200 uppercase">
                                 {product.sku}
                               </div>
                             )}
@@ -2182,6 +2546,111 @@ const TransactionHistory: React.FC = () => {
               variant="destructive"
               className="flex-1 gap-2"
               onClick={() => exchangeToDelete && undoExchange(exchangeToDelete)}
+            >
+              <Trash2 className="h-4 w-4" />
+              Ya, Batalkan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Refund Confirmation Dialog */}
+      <Dialog open={showRefundConfirm} onOpenChange={(open) => !open && setShowRefundConfirm(false)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader className="text-center">
+            <DialogTitle className="text-xl">Konfirmasi Refund</DialogTitle>
+            <DialogDescription className="text-center text-muted-foreground">
+              {exchangeItemToReturn && (
+                <>
+                  Anda akan me-refund <span className="font-semibold text-foreground">{exchangeItemToReturn.item.name}</span>.
+                  <br />
+                  <span className="text-xs mt-2 block">Stok akan dikembalikan dan transaksi akan tercatat sebagai refund.</span>
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Qty Selector in confirmation dialog */}
+          {exchangeItemToReturn && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+              <div className="text-sm font-medium text-red-800 mb-2 text-center">Jumlah yang akan di-refund:</div>
+              <div className="flex items-center justify-center gap-3">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 border-red-300 hover:bg-red-100"
+                  onClick={() => setReturnQuantity(q => Math.max(1, q - 1))}
+                  disabled={returnQuantity <= 1}
+                >
+                  <Minus className="h-4 w-4" />
+                </Button>
+                <div className="flex flex-col items-center">
+                  <span className="text-2xl font-bold text-red-700 min-w-[40px] text-center">{returnQuantity}</span>
+                  <span className="text-[10px] text-muted-foreground">dari {exchangeItemToReturn.item.quantity} pcs</span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 border-red-300 hover:bg-red-100"
+                  onClick={() => setReturnQuantity(q => Math.min(exchangeItemToReturn.item.quantity, q + 1))}
+                  disabled={returnQuantity >= exchangeItemToReturn.item.quantity}
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="mt-2 text-center text-sm font-semibold text-red-700">
+                Nilai: {formatCurrency(exchangeItemToReturn.item.price * returnQuantity)}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="flex gap-3 sm:justify-center mt-4">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setShowRefundConfirm(false)}
+            >
+              Batal
+            </Button>
+            <Button
+              variant="destructive"
+              className="flex-1 gap-2 bg-red-600 hover:bg-red-700"
+              onClick={handleRefundOnly}
+            >
+              <RotateCcw className="h-4 w-4" />
+              Ya, Refund
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Refund Confirmation Dialog */}
+      <Dialog open={!!refundToDelete} onOpenChange={(open) => !open && setRefundToDelete(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader className="text-center">
+            <DialogTitle className="text-xl">Batalkan Refund?</DialogTitle>
+            <DialogDescription className="text-center text-muted-foreground">
+              {refundToDelete && (
+                <>
+                  Anda akan membatalkan refund untuk <span className="font-semibold text-foreground">{refundToDelete.item.name}</span> sebanyak <span className="font-semibold text-foreground">{refundToDelete.item.quantity} pcs</span>.
+                  <br />
+                  <span className="text-xs mt-2 block">Stok akan dikurangi kembali dan refund akan dihapus dari riwayat.</span>
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-3 sm:justify-center mt-4">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setRefundToDelete(null)}
+            >
+              Batal
+            </Button>
+            <Button
+              variant="destructive"
+              className="flex-1 gap-2"
+              onClick={() => refundToDelete && handleDeleteRefund(refundToDelete)}
             >
               <Trash2 className="h-4 w-4" />
               Ya, Batalkan

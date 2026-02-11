@@ -16,6 +16,7 @@ export const LS_KEYS = {
   VISITORS_LOG: "VISITORS_LOG",
   VISITOR_LOST_LOG: "VISITOR_LOST_LOG",
   GAS_URL: "pos_gas_url",
+  PRODUCT_GAS_URL: "pos_product_gas_url",
   TELEGRAM_BOT_TOKEN: "pos_telegram_bot_token",
   TELEGRAM_CHAT_ID: "pos_telegram_chat_id",
 };
@@ -232,6 +233,7 @@ export async function backupAllDataToFile(): Promise<void> {
         // Multi-Toko Connection Settings (version 2.2+)
         multiTokoConnection: {
           gasUrl: getFromLS(LS_KEYS.GAS_URL, ""),
+          productGasUrl: getFromLS(LS_KEYS.PRODUCT_GAS_URL, ""),
           telegramBotToken: getFromLS(LS_KEYS.TELEGRAM_BOT_TOKEN, ""),
           telegramChatId: getFromLS(LS_KEYS.TELEGRAM_CHAT_ID, ""),
         },
@@ -345,6 +347,9 @@ export function restoreFromFile(file: File): Promise<void> {
             if (conn.gasUrl) {
               saveToLS(LS_KEYS.GAS_URL, conn.gasUrl);
             }
+            if (conn.productGasUrl) {
+              saveToLS(LS_KEYS.PRODUCT_GAS_URL, conn.productGasUrl);
+            }
             if (conn.telegramBotToken) {
               saveToLS(LS_KEYS.TELEGRAM_BOT_TOKEN, conn.telegramBotToken);
             }
@@ -385,6 +390,7 @@ export function getConfig() {
   // Use getFromLS to properly parse JSON-stringified values (saveToLS uses JSON.stringify)
   return {
     gasUrl: getFromLS<string>(LS_KEYS.GAS_URL, ""),
+    productGasUrl: getFromLS<string>(LS_KEYS.PRODUCT_GAS_URL, ""),
     telegramBotToken: getFromLS<string>(LS_KEYS.TELEGRAM_BOT_TOKEN, ""),
     telegramChatId: getFromLS<string>(LS_KEYS.TELEGRAM_CHAT_ID, "")
   };

@@ -223,6 +223,8 @@ const POSScreen = () => {
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<string>("cash");
   const [amountPaid, setAmountPaid] = useState<string>("");
+  const [editingPrices, setEditingPrices] = useState<Record<string, string>>({});
+  const [editingQuantities, setEditingQuantities] = useState<Record<string, string>>({});
   const [showReceiptDialog, setShowReceiptDialog] = useState(false);
   const [receiptContent, setReceiptContent] = useState<string>('');
   const printAreaRef = useRef<HTMLDivElement>(null);
@@ -340,7 +342,13 @@ const POSScreen = () => {
       addToCartStore(product);
       updateQuantityStore(product.id, newQuantity);
     } else {
-      updateQuantityStore(product.id, newQuantity);
+      // For POS Screen: if quantity is 0, remove from cart
+      // We pass -1 to trigger the removal logic in store
+      if (newQuantity <= 0) {
+        updateQuantityStore(product.id, -1);
+      } else {
+        updateQuantityStore(product.id, newQuantity);
+      }
     }
   };
 
@@ -540,7 +548,14 @@ const POSScreen = () => {
                       <div className="flex gap-2">
                         {/* Left side - product info */}
                         <div className="flex-1 min-w-0">
-                          <div className="font-medium text-sm leading-tight break-words">{item.name}</div>
+                          <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                            {item.sku && (
+                              <div className="text-[10px] px-2 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200 uppercase flex-shrink-0">
+                                {item.sku}
+                              </div>
+                            )}
+                            <div className="font-medium text-sm leading-tight break-words">{item.name}</div>
+                          </div>
                           <div className="flex items-center gap-3 mt-1">
                             <span className="font-semibold text-amber-600">{formatCurrency(item.price)}</span>
                             {item.type === "product" && item.stock !== undefined && (
@@ -550,16 +565,11 @@ const POSScreen = () => {
                         </div>
                         {/* Right side - Kode + Category + controls */}
                         <div className="flex flex-col items-end gap-2 flex-shrink-0">
-                          {/* Kode & Category badges at top right */}
+                          {/* Category badge at top right */}
                           <div className="flex items-center gap-1">
                             {item.category && (
                               <div className="text-[10px] text-blue-600 border border-blue-200 px-1.5 py-0.5 rounded bg-blue-50">
                                 {item.category}
-                              </div>
-                            )}
-                            {item.sku && (
-                              <div className="text-xs text-slate-600 border border-slate-300 px-2 py-0.5 rounded bg-white">
-                                {item.sku}
                               </div>
                             )}
                           </div>
@@ -586,7 +596,7 @@ const POSScreen = () => {
                             <input
                               type="text"
                               inputMode="numeric"
-                              value={qty === 0 ? "" : qty.toLocaleString('id-ID')}
+                              value={editingQuantities[item.id] !== undefined ? editingQuantities[item.id] : (qty === 0 ? "" : qty.toLocaleString('id-ID'))}
                               placeholder="0"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -598,8 +608,16 @@ const POSScreen = () => {
                               onChange={(e) => {
                                 e.stopPropagation();
                                 const val = e.target.value.replace(/\D/g, "");
+                                setEditingQuantities(prev => ({ ...prev, [item.id]: val }));
                                 const newQty = parseInt(val) || 0;
                                 updateQuantity(item, newQty);
+                              }}
+                              onBlur={() => {
+                                setEditingQuantities(prev => {
+                                  const next = { ...prev };
+                                  delete next[item.id];
+                                  return next;
+                                });
                               }}
                               className="w-12 h-9 text-center text-sm font-bold border-2 border-slate-200 rounded-md focus:border-amber-400 focus:ring-1 focus:ring-amber-400 outline-none transition-all"
                               aria-label="Ubah kuantitas"
@@ -634,16 +652,24 @@ const POSScreen = () => {
                               type="text"
                               inputMode="numeric"
                               placeholder="0"
-                              value={(inCart?.price ?? item.price).toLocaleString('id-ID')}
+                              value={editingPrices[item.id] !== undefined ? editingPrices[item.id] : (inCart?.price ?? item.price).toLocaleString('id-ID')}
                               onClick={(e) => e.stopPropagation()}
                               onFocus={(e) => {
+                                (e.target as HTMLInputElement).select();
                                 setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
                               }}
                               onChange={(e) => {
-                                // Remove dots/commas and parse as number
-                                const cleanValue = e.target.value.replace(/\./g, '').replace(/,/g, '');
-                                const newPrice = parseInt(cleanValue) || 0;
+                                const val = e.target.value.replace(/\D/g, '');
+                                setEditingPrices(prev => ({ ...prev, [item.id]: val }));
+                                const newPrice = parseInt(val) || 0;
                                 setItemPrice(item.id, newPrice);
+                              }}
+                              onBlur={() => {
+                                setEditingPrices(prev => {
+                                  const next = { ...prev };
+                                  delete next[item.id];
+                                  return next;
+                                });
                               }}
                               className="w-24 px-2 py-1 h-8 text-right text-sm focus:ring-1 focus:ring-amber-400 focus:outline-none"
                               aria-label="Ubah harga item di keranjang"
