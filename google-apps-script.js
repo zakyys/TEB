@@ -71,6 +71,59 @@ function doPost(e) {
             return updateProduct(data.product);
         }
 
+        // Bulk Upload Products (untuk Upload Semua Produk dari aplikasi)
+        if (action === "bulkUpdateProducts") {
+            var allProducts = data.products || [];
+            if (allProducts.length === 0) {
+                return ContentService.createTextOutput(JSON.stringify({
+                    success: false, error: "Tidak ada data produk"
+                })).setMimeType(ContentService.MimeType.JSON);
+            }
+
+            // Cari atau buat sheet "Produk"
+            var prodSheet = ss.getSheetByName("Produk");
+            if (!prodSheet) {
+                prodSheet = ss.insertSheet("Produk");
+                prodSheet.appendRow(["KODE", "Nama", "Harga Beli", "Harga Jual", "Stok"]);
+            }
+
+            // Clear data lama (sisakan header row 1)
+            if (prodSheet.getLastRow() > 1) {
+                prodSheet.getRange(2, 1, prodSheet.getLastRow() - 1, 5).clearContent();
+            }
+
+            // Pastikan baris cukup
+            var maxRows = prodSheet.getMaxRows();
+            var neededRows = allProducts.length + 2;
+            if (neededRows > maxRows) {
+                prodSheet.insertRowsAfter(maxRows, neededRows - maxRows + 50);
+            }
+
+            // Tulis semua data produk
+            var rowData = allProducts.map(function (p) {
+                return [
+                    String(p.kode).toUpperCase(),
+                    p.nama,
+                    p.hargaBeli || 0,
+                    p.hargaJual || 0,
+                    p.stok || 0
+                ];
+            });
+            prodSheet.getRange(2, 1, rowData.length, 5).setValues(rowData);
+
+            // Format angka
+            prodSheet.getRange(2, 3, rowData.length, 1).setNumberFormat("#,##0");
+            prodSheet.getRange(2, 4, rowData.length, 1).setNumberFormat("#,##0");
+            prodSheet.getRange(2, 5, rowData.length, 1).setNumberFormat("0");
+            prodSheet.autoResizeColumns(1, 5);
+
+            return ContentService.createTextOutput(JSON.stringify({
+                success: true,
+                message: "Bulk upload selesai!",
+                total: allProducts.length
+            })).setMimeType(ContentService.MimeType.JSON);
+        }
+
         // Reset/Clear Sheets
         if (action === "resetSheets") {
             return resetSheets(data);

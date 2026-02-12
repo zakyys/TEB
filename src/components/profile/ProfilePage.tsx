@@ -1259,13 +1259,14 @@ const ProfilePage = () => {
                 className="w-full mt-2 text-xs border-orange-300 text-orange-700 hover:bg-orange-50"
                 disabled={uploadingProducts}
                 onClick={async () => {
-                  // Tentukan URL target
-                  const targetUrl = (tempProductGasUrl || tempGasUrl || "").trim();
+                  // Gunakan config yg sudah tersimpan, BUKAN temp input dialog
+                  const currentConfig = getConfig();
+                  const targetUrl = (currentConfig.productGasUrl || currentConfig.gasUrl || "").trim();
                   if (!targetUrl) {
-                    return alert("❌ URL belum diisi! Isi URL Produk atau URL Utama dulu.");
+                    return alert("❌ URL belum dikonfigurasi!\n\nSilakan isi URL GAS (Utama atau Produk) lalu klik SIMPAN terlebih dahulu.");
                   }
 
-                  // Ambil data produk dari localStorage
+                  // Ambil data produk dari cache
                   const products: Product[] = getCachedProducts() as Product[];
                   if (products.length === 0) {
                     return alert("❌ Tidak ada data produk di aplikasi untuk di-upload.");
@@ -1275,13 +1276,14 @@ const ProfilePage = () => {
                   const confirmed = window.confirm(
                     `⚠️ UPLOAD PRODUK KE SHEET\n\n` +
                     `Akan mengirim ${products.length} produk SEKALIGUS ke Google Sheet.\n` +
-                    `Data yang sudah ada di Sheet akan di-update, produk baru akan ditambahkan.\n\n` +
+                    `Data yang sudah ada di Sheet akan di-REPLACE (timpa).\n\n` +
+                    `URL Target:\n${targetUrl.substring(0, 60)}...\n\n` +
                     `Lanjutkan?`
                   );
                   if (!confirmed) return;
 
                   setUploadingProducts(true);
-                  setUploadProgress(`Mengirim ${products.length} produk sekaligus...`);
+                  setUploadProgress(`📤 Mengirim ${products.length} produk...`);
 
                   try {
                     // Kirim semua produk dalam 1x request (BULK)
@@ -1293,7 +1295,7 @@ const ProfilePage = () => {
                       stok: p.stock || 0,
                     }));
 
-                    await fetch(targetUrl, {
+                    const response = await fetch(targetUrl, {
                       method: "POST",
                       mode: "no-cors",
                       headers: { "Content-Type": "application/json" },
@@ -1303,13 +1305,22 @@ const ProfilePage = () => {
                       }),
                     });
 
-                    alert(
-                      `✅ Upload Selesai!\n\n` +
-                      `${products.length} produk berhasil dikirim ke Google Sheet.\n` +
-                      `\nSilakan cek Spreadsheet Database Produk Anda.`
-                    );
-                  } catch {
-                    alert("❌ Gagal mengirim data ke Google Sheet.");
+                    // Dengan mode no-cors, response.type = "opaque" dan statusnya selalu 0
+                    // Tapi jika fetch sendiri berhasil (tidak throw), berarti request terkirim ke server
+                    if (response.type === "opaque" || response.ok) {
+                      alert(
+                        `✅ Upload Terkirim!\n\n` +
+                        `${products.length} produk telah dikirim ke Google Sheet.\n\n` +
+                        `📋 Silakan cek Spreadsheet Database Produk Anda\nuntuk memastikan data sudah masuk.\n\n` +
+                        `💡 Jika data tidak muncul, pastikan:\n` +
+                        `1. URL GAS sudah benar (Produk / Utama)\n` +
+                        `2. GAS sudah di-deploy ulang setelah update script`
+                      );
+                    } else {
+                      alert(`❌ Server menolak request.\n\nStatus: ${response.status}\nCoba deploy ulang GAS Anda.`);
+                    }
+                  } catch (err) {
+                    alert(`❌ Gagal mengirim data ke Google Sheet.\n\nKemungkinan penyebab:\n1. Tidak ada koneksi internet\n2. URL GAS salah\n3. GAS belum di-deploy\n\nError: ${err}`);
                   }
 
                   setUploadingProducts(false);
