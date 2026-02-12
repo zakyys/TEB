@@ -1,5 +1,6 @@
 ﻿import type { CartItem, Product } from '@/types/pos'
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency } from '@/lib/utils'
+import { setProducts as setCachedProducts } from '@/lib/productCache'
 import { safeSaveTransaction, safeInitAndMigrate } from '@/lib/indexedDB'
 import type { ProfileData } from '@/types/pos'
 
@@ -78,7 +79,7 @@ export async function completeTransactionUtil(params: CompleteTxParams): Promise
   })
 
   // Persist changes
-  saveToLS(LS_KEYS.PRODUCTS, updatedProducts)
+  setCachedProducts(updatedProducts)
 
   // Save transaction to IndexedDB (safe - won't crash, auto fallback to localStorage)
   const saved = await safeSaveTransaction(transaction)

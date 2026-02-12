@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency, getConfig } from "@/lib/utils";
+import { getProducts as getCachedProducts, setProducts as setCachedProducts } from "@/lib/productCache";
 import { DUMMY_PRODUCTS } from "@/lib/dummyData";
 import {
   Search,
@@ -216,7 +217,7 @@ const ProductManagement = () => {
           threshold: 5
         }));
 
-        saveToLS(LS_KEYS.PRODUCTS, sheetProducts);
+        setCachedProducts(sheetProducts);
         setProducts(sheetProducts);
         try { window.dispatchEvent(new CustomEvent('pos:products:update', { detail: sheetProducts })); } catch { }
 
@@ -291,9 +292,9 @@ const ProductManagement = () => {
 
   // Load products from localStorage and listen to external updates
   useEffect(() => {
-    const storedProducts = getFromLS<Product[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+    const storedProducts = getCachedProducts() as Product[];
     if (storedProducts.length === 0) {
-      saveToLS(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+      setCachedProducts(DUMMY_PRODUCTS);
       setProducts(DUMMY_PRODUCTS);
     } else {
       setProducts(storedProducts);
@@ -308,10 +309,10 @@ const ProductManagement = () => {
         if (updated && Array.isArray(updated)) {
           setProducts(updated);
         } else {
-          setProducts(getFromLS<Product[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS));
+          setProducts(getCachedProducts() as Product[]);
         }
       } catch {
-        setProducts(getFromLS<Product[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS));
+        setProducts(getCachedProducts() as Product[]);
       }
     };
     window.addEventListener('pos:products:update', onProductsUpdate);
@@ -522,7 +523,7 @@ const ProductManagement = () => {
 
     const updatedProducts = [...products, productToAdd];
     setProducts(updatedProducts);
-    saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+    setCachedProducts(updatedProducts);
 
     // AUTO-PUSH ke Google Sheet
     pushProductToSheet(productToAdd);
@@ -545,7 +546,7 @@ const ProductManagement = () => {
     );
 
     setProducts(updatedProducts);
-    saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+    setCachedProducts(updatedProducts);
 
     // AUTO-PUSH ke Google Sheet
     pushProductToSheet(selectedProduct);
@@ -562,7 +563,7 @@ const ProductManagement = () => {
         (product) => product.id !== productId,
       );
       setProducts(updatedProducts);
-      saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+      setCachedProducts(updatedProducts);
 
       // (DIHAPUS) Tidak lagi menghapus di Google Sheet agar database tetap utuh.
       // Jika ingin muncul lagi, silakan lakukan Sync.
@@ -1271,7 +1272,7 @@ const ProductManagement = () => {
                     });
 
                     setProducts(updatedProducts);
-                    saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+                    setCachedProducts(updatedProducts);
                     try {
                       window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
                     } catch { }
@@ -1383,7 +1384,7 @@ const ProductManagement = () => {
               onClick={() => {
                 // Delete all products
                 setProducts([]);
-                saveToLS(LS_KEYS.PRODUCTS, []);
+                setCachedProducts([]);
                 try {
                   window.dispatchEvent(new CustomEvent('pos:products:update', { detail: [] }));
                 } catch { }

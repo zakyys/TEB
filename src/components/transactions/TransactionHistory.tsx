@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useRef, useCallback } from "react"
 import { useLocation } from "react-router-dom";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
 import { safeGetAllTransactions, safeSaveAllTransactions, safeInitAndMigrate } from "@/lib/indexedDB";
+import { getProducts, setProducts } from "@/lib/productCache";
 import { DUMMY_TRANSACTIONS, DUMMY_PRODUCTS } from "@/lib/dummyData";
 import { Search, Calendar, Printer, RotateCcw, ChevronRight, ChevronLeft, Info, X, ArrowRight, Banknote, RefreshCw, ShoppingCart, Pencil, Trash2, Minus, Plus, ScanBarcode, Tag } from "lucide-react";
 import { BrowserMultiFormatReader } from '@zxing/browser';
@@ -20,7 +21,7 @@ import { saveAs } from "file-saver";
 import { useToast } from "@/components/ui/use-toast";
 import { getDailyStatsInRange } from "@/lib/visitors";
 import { getExchanges, ExchangeRecord, addRefund, getRefunds, RefundRecord, addExchange, deleteExchange, deleteRefund } from "@/lib/exchange";
-import { getNotes, deleteNoteByTransactionId } from "@/lib/notes";
+import { getNotes, deleteNoteByTransactionId, updateNote, completeNote } from "@/lib/notes";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ProfileData } from "@/types/pos";
 
@@ -33,6 +34,10 @@ interface TransactionItem {
   type: ItemType;
   sku?: string;
   purchasePrice?: number;
+  sameDayRefunded?: boolean;
+  refunded?: boolean;
+  refundDate?: string;
+  refundedQty?: number;
 }
 
 interface Transaction {
@@ -278,7 +283,7 @@ const TransactionHistory: React.FC = () => {
 
   // Export helpers (flatten items)
   const getExportRows = () => {
-    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+    const products = getProducts();
     const visitorLogs = getFromLS<any[]>(LS_KEYS.VISITORS_LOG, []);
     const lostLogs = getFromLS<any[]>(LS_KEYS.VISITOR_LOST_LOG, []);
 
@@ -472,11 +477,11 @@ const TransactionHistory: React.FC = () => {
         }
 
         // Reduce stock (refund was returned, now we're undoing it)
-        const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
+        const products = getProducts();
         const productIndex = products.findIndex(p => p.sku === itemToDelete.sku || p.name === itemToDelete.name);
         if (productIndex !== -1 && products[productIndex].stock !== undefined) {
           products[productIndex].stock -= itemToDelete.quantity || 1;
-          saveToLS(LS_KEYS.PRODUCTS, products);
+          setProducts(products);
         }
       }
 
@@ -497,13 +502,13 @@ const TransactionHistory: React.FC = () => {
 
     // Normal delete flow (not refunded item)
     // Return stock
-    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
+    const products = getProducts();
     const productIndex = products.findIndex(
       p => p.sku === itemToDelete.sku || p.name === itemToDelete.name
     );
     if (productIndex !== -1 && products[productIndex].stock !== undefined) {
       products[productIndex].stock += itemToDelete.quantity || 1;
-      saveToLS(LS_KEYS.PRODUCTS, products);
+      setProducts(products);
     }
 
     const updatedTransactions = transactions.map(t => {
@@ -545,11 +550,11 @@ const TransactionHistory: React.FC = () => {
     const qtyDiff = oldQty - newQty; // positive = returning stock, negative = taking from stock
 
     // Update stock first
-    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
+    const products = getProducts();
     const productIndex = products.findIndex((p: any) => p.sku === item.sku || p.name === item.name);
     if (productIndex !== -1 && products[productIndex].type === 'product') {
       products[productIndex].stock = (products[productIndex].stock || 0) + qtyDiff;
-      saveToLS(LS_KEYS.PRODUCTS, products);
+      setProducts(products);
       window.dispatchEvent(new CustomEvent('pos:products:update', { detail: products }));
     }
 
@@ -593,7 +598,7 @@ const TransactionHistory: React.FC = () => {
     if (!selectedTransaction) return;
     const trxId = selectedTransaction.id;
     const validIndex = selectedItemIndex !== null && selectedItemIndex >= 0 && selectedItemIndex < selectedTransaction.items.length;
-    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+    const products = getProducts();
 
     // Check if same day refund (once for entire function)
     const refundDate = new Date().toISOString().split('T')[0];
@@ -636,7 +641,7 @@ const TransactionHistory: React.FC = () => {
         }
         return p;
       });
-      localStorage.setItem(LS_KEYS.PRODUCTS, JSON.stringify(updatedProducts));
+      setProducts(updatedProducts);
       window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
 
       // Smart refund logic (already checked at function start)
@@ -710,6 +715,42 @@ const TransactionHistory: React.FC = () => {
         safeSaveAllTransactions(updated);
       }
 
+      // ★ UPDATE HUTANG NOTE: Kurangi jumlah hutang jika transaksi ini adalah hutang
+      const isHutangTrx = (selectedTransaction as any).paymentMethod === 'hutang' || (selectedTransaction as any).isHutang;
+      if (isHutangTrx) {
+        const allNotes = getNotes();
+        // Cari note hutang yang terkait dengan transaksi ini
+        let hutangNote = allNotes.find((n: any) => n.transactionId === trxId && n.type === 'hutang');
+        // Fallback: cari berdasarkan nama & jumlah
+        if (!hutangNote) {
+          hutangNote = allNotes.find((n: any) =>
+            n.type === 'hutang' &&
+            !n.completed &&
+            n.date.split('T')[0] === selectedTransaction.date.split('T')[0] &&
+            (n.customerName === selectedTransaction.customer || selectedTransaction.customer === 'Pelanggan Umum')
+          );
+        }
+        if (hutangNote && !hutangNote.completed) {
+          const refundedAmount = item.price * qtyToReturn;
+          const newAmount = Math.max(0, (hutangNote.amount || 0) - refundedAmount);
+          // Update deskripsi qty: "(4x)" → "(2x)"
+          let updatedContent = hutangNote.content;
+          const qtyMatch = updatedContent.match(/\((\d+)x\)\s*$/);
+          if (qtyMatch) {
+            const oldQty = parseInt(qtyMatch[1]);
+            const newQty = Math.max(0, oldQty - qtyToReturn);
+            updatedContent = updatedContent.replace(/\(\d+x\)\s*$/, `(${newQty}x)`);
+          }
+          if (newAmount <= 0) {
+            // Hutang lunas karena semua item di-refund
+            updateNote(hutangNote.id, { amount: 0, content: updatedContent });
+            completeNote(hutangNote.id);
+          } else {
+            updateNote(hutangNote.id, { amount: newAmount, content: updatedContent });
+          }
+        }
+      }
+
       setIsDialogOpen(false);
       setSelectedItemIndex(null);
       setReturnQuantity(1); // Reset return qty
@@ -744,14 +785,14 @@ const TransactionHistory: React.FC = () => {
         }
 
         // Update stock
-        const currentProducts = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
+        const currentProducts = getProducts();
         const updatedProducts = currentProducts.map(p => {
           if (p.sku === sku && p.stock !== undefined) {
             return { ...p, stock: p.stock + item.quantity };
           }
           return p;
         });
-        localStorage.setItem(LS_KEYS.PRODUCTS, JSON.stringify(updatedProducts));
+        setProducts(updatedProducts);
       });
 
       // Smart refund logic for full refund (already checked at function start)
@@ -773,6 +814,31 @@ const TransactionHistory: React.FC = () => {
         });
         setTransactions(updated);
         safeSaveAllTransactions(updated);
+      }
+
+      // ★ UPDATE HUTANG NOTE: Full refund = hapus/lunas hutang
+      const isHutangTrx = (selectedTransaction as any).paymentMethod === 'hutang' || (selectedTransaction as any).isHutang;
+      if (isHutangTrx) {
+        const allNotes = getNotes();
+        let hutangNote = allNotes.find((n: any) => n.transactionId === trxId && n.type === 'hutang');
+        if (!hutangNote) {
+          hutangNote = allNotes.find((n: any) =>
+            n.type === 'hutang' &&
+            !n.completed &&
+            n.date.split('T')[0] === selectedTransaction.date.split('T')[0] &&
+            (n.customerName === selectedTransaction.customer || selectedTransaction.customer === 'Pelanggan Umum')
+          );
+        }
+        if (hutangNote && !hutangNote.completed) {
+          // Update deskripsi: tandai semua item sudah di-refund
+          let updatedContent = hutangNote.content;
+          const qtyMatch = updatedContent.match(/\((\d+)x\)\s*$/);
+          if (qtyMatch) {
+            updatedContent = updatedContent.replace(/\(\d+x\)\s*$/, '(0x - REFUND)');
+          }
+          updateNote(hutangNote.id, { amount: 0, content: updatedContent });
+          completeNote(hutangNote.id);
+        }
       }
 
       setIsDialogOpen(false);
@@ -824,7 +890,7 @@ const TransactionHistory: React.FC = () => {
   const processExchange = async () => {
     if (!selectedTransaction || !exchangeItemToReturn || !selectedNewProduct) return;
 
-    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+    const products = getProducts();
     const oldItem = exchangeItemToReturn.item;
     const oldItemIndex = exchangeItemToReturn.index;
     const trxId = selectedTransaction.id;
@@ -875,7 +941,7 @@ const TransactionHistory: React.FC = () => {
       }
       return p;
     });
-    localStorage.setItem(LS_KEYS.PRODUCTS, JSON.stringify(updatedProducts));
+    setProducts(updatedProducts);
     window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
 
     // === NEW LOGIC: Proper Retail Accounting ===
@@ -987,7 +1053,7 @@ const TransactionHistory: React.FC = () => {
   };
 
   const getFilteredProducts = () => {
-    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+    const products = getProducts();
     let filtered = products;
     if (productPickerSearch) {
       // Use matchesLoose for flexible search like POS
@@ -1022,7 +1088,7 @@ const TransactionHistory: React.FC = () => {
 
   // Undo/Cancel exchange - revert stock and transactions (NEW LOGIC)
   const undoExchange = async (exchange: ExchangeRecord) => {
-    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
+    const products = getProducts();
 
     // 1. Revert stock: +newItem qty (barang baru dikembalikan ke stok), -originalItem qty (barang lama diambil kembali)
     let updatedProducts = products.map(p => {
@@ -1034,7 +1100,7 @@ const TransactionHistory: React.FC = () => {
       }
       return p;
     });
-    saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+    setProducts(updatedProducts);
     window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
 
     // 2. Find and DELETE the new transaction (created on exchange date for new item)
@@ -1116,7 +1182,7 @@ const TransactionHistory: React.FC = () => {
 
   // Handle delete refund - remove refund record and restore stock
   const handleDeleteRefund = (refund: RefundRecord) => {
-    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+    const products = getProducts();
 
     // Restore stock: subtract the refunded quantity (because refund added it back)
     const updatedProducts = products.map(p => {
@@ -1125,7 +1191,7 @@ const TransactionHistory: React.FC = () => {
       }
       return p;
     });
-    saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+    setProducts(updatedProducts);
     window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
 
     // Delete the refund record
@@ -1154,7 +1220,7 @@ const TransactionHistory: React.FC = () => {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-500" />
             <input
               type="text"
-              placeholder="MASUKKAN KODE"
+              placeholder="KODE / NAMA"
               className="w-full pl-12 pr-12 py-3 bg-gray-100 dark:bg-gray-800 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white dark:focus:bg-gray-700 transition-all font-medium"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -1295,7 +1361,7 @@ const TransactionHistory: React.FC = () => {
             {/* Item Terjual - Grid 2 kolom dengan tombol tukar */}
             <TabsContent value="completed" className="space-y-2">
               {(() => {
-                const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+                const products = getProducts();
                 const allItems = filteredTransactions
                   .filter((t) => t.status === "completed")
                   .flatMap((transaction) =>
@@ -1304,7 +1370,7 @@ const TransactionHistory: React.FC = () => {
                       .filter((item) => {
                         if (!searchQuery) return true;
                         const itemSku = item.sku || products.find((p: any) => p.name === item.name)?.sku || "";
-                        return matchesLoose(item.name, searchQuery) || matchesLoose(itemSku, searchQuery);
+                        return matchesLoose(item.name, searchQuery) || matchesLoose(itemSku, searchQuery) || matchesLoose(transaction.customer, searchQuery);
                       })
                       .map((item, itemIndex) => {
                         const itemSku = item.sku || products.find((p: any) => p.name === item.name)?.sku || "";
@@ -1312,7 +1378,7 @@ const TransactionHistory: React.FC = () => {
                           transaction,
                           item,
                           itemIndex,
-                          relevance: getSearchRelevance(itemSku, searchQuery) + (matchesLoose(item.name, searchQuery) ? 50 : 0)
+                          relevance: getSearchRelevance(itemSku, searchQuery) + (matchesLoose(item.name, searchQuery) ? 50 : 0) + (matchesLoose(transaction.customer, searchQuery) ? 80 : 0)
                         };
                       })
                   )
@@ -1499,6 +1565,41 @@ const TransactionHistory: React.FC = () => {
                                   <div className="text-[10px] px-2 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200">
                                     {sku}
                                   </div>
+                                  {/* Hutang / Lunas / Customer label */}
+                                  {(() => {
+                                    const isHutangTrx = (transaction as any).paymentMethod === 'hutang' || (transaction as any).isHutang || (item as any).isHutang;
+                                    if (isHutangTrx) {
+                                      // Check if hutang is lunas by looking at notes
+                                      const allNotes = getNotes();
+                                      const hutangNote = allNotes.find((n: any) =>
+                                        n.type === 'hutang' && (
+                                          n.transactionId === transaction.id ||
+                                          (n.date.split('T')[0] === transaction.date.split('T')[0] && n.customerName === transaction.customer)
+                                        )
+                                      );
+                                      const isLunas = hutangNote?.completed;
+                                      const customerName = transaction.customer || hutangNote?.customerName || '-';
+                                      return isLunas ? (
+                                        <div className="text-[9px] px-2 py-0.5 rounded font-bold text-green-700 bg-green-50 border border-green-200">
+                                          {customerName} - LUNAS ✓
+                                        </div>
+                                      ) : (
+                                        <div className="text-[9px] px-2 py-0.5 rounded font-bold text-red-600 bg-red-50 border border-red-200">
+                                          Hutang - {customerName}
+                                        </div>
+                                      );
+                                    }
+                                    // Non-hutang: tampilkan nama pelanggan jika ada
+                                    const custName = transaction.customer;
+                                    if (custName && custName !== 'Pelanggan Umum') {
+                                      return (
+                                        <div className="text-[9px] px-2 py-0.5 rounded font-bold text-blue-600 bg-blue-50 border border-blue-200">
+                                          {custName}
+                                        </div>
+                                      );
+                                    }
+                                    return null;
+                                  })()}
                                   {/* Action buttons - Edit & Delete (hidden for Selisih Tukar items and refunded items) */}
                                   {isSelisihTukar ? (
                                     // Show info text instead of edit/delete buttons
@@ -1714,7 +1815,7 @@ const TransactionHistory: React.FC = () => {
                         <div className="space-y-4">
                           {paginatedActivity.map((item, idx) => {
                             if (item.type === 'exchange') {
-                              const ex = item.data as ExchangeRecord;
+                              const ex = item.data as any as ExchangeRecord;
                               const isHighlighted = highlightedExchangeId === ex.id;
                               return (
                                 <Card
@@ -1973,7 +2074,7 @@ const TransactionHistory: React.FC = () => {
                       ? selectedTransaction.items.filter((_, i) => i === selectedItemIndex)
                       : selectedTransaction.items;
                     return list.map((item, index) => {
-                      const allProducts = getFromLS<any[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+                      const allProducts = getProducts();
                       let sku = item.sku; if (!sku) { const prod = allProducts.find(p => p.name === item.name); sku = prod?.sku || "-"; }
                       return (
                         <div key={index} className="flex justify-between">
@@ -2124,7 +2225,7 @@ const TransactionHistory: React.FC = () => {
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm font-medium flex-1">{exchangeItemToReturn.item.name}</div>
                   {(() => {
-                    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+                    const products = getProducts();
                     let sku = exchangeItemToReturn.item.sku;
                     if (!sku) {
                       const prod = products.find(p => p.name === exchangeItemToReturn.item.name);

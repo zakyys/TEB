@@ -13,6 +13,7 @@ import {
   sendBackupAsTextToTelegram,
   getConfig,
 } from "@/lib/utils";
+import { getProducts as getCachedProducts } from "@/lib/productCache";
 import { getTransactionsCount, getAllTransactions, getStorageEstimate, getTodayTransactions, saveTransaction } from "@/lib/indexedDB";
 import { VisitorLog, VisitorLostLog } from "@/lib/visitors";
 import { Button } from "@/components/ui/button";
@@ -1042,7 +1043,7 @@ const ProfilePage = () => {
         {/* Version Info */}
         <div className="mt-8 mb-4 text-center">
           <p className="text-xs text-muted-foreground font-medium opacity-50">
-            APLIKASI TOKO BAUT - V10
+            APLIKASI TOKO BAUT - V11
           </p>
         </div>
       </div>
@@ -1265,7 +1266,7 @@ const ProfilePage = () => {
                   }
 
                   // Ambil data produk dari localStorage
-                  const products: Product[] = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
+                  const products: Product[] = getCachedProducts() as Product[];
                   if (products.length === 0) {
                     return alert("❌ Tidak ada data produk di aplikasi untuk di-upload.");
                   }
@@ -1318,7 +1319,7 @@ const ProfilePage = () => {
                 {uploadingProducts ? (
                   <>{uploadProgress}</>
                 ) : (
-                  <>📤 Upload Semua Produk ke Sheet ({getFromLS<Product[]>(LS_KEYS.PRODUCTS, []).length} produk)</>
+                  <>📤 Upload Semua Produk ke Sheet ({getCachedProducts().length} produk)</>
                 )}
               </Button>
             </div>

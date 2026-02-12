@@ -13,6 +13,7 @@ import PurchaseInput from "@/components/purchase/PurchaseInput";
 import { Toaster } from "@/components/ui/toaster";
 import { PWAStatus } from "@/components/layout/PWAStatus";
 import { getStoreName } from "@/lib/utils";
+import { initProductCache } from "@/lib/productCache";
 
 
 // SplashScreen component
@@ -96,6 +97,14 @@ function App() {
   }, []);
 
   useEffect(() => {
+    // Initialize product cache during splash screen
+    // By the time splash ends, products are loaded in memory
+    initProductCache().then(() => {
+      console.log('[App] Product cache initialized');
+    }).catch(err => {
+      console.error('[App] Product cache init failed:', err);
+    });
+
     const timer = setTimeout(() => setShowSplash(false), 3000);
     return () => clearTimeout(timer);
   }, []);

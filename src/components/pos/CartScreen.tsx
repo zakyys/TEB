@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency } from "@/lib/utils";
+import { getProducts, setProducts as setCachedProducts } from "@/lib/productCache";
 import { Button } from "@/components/ui/button";
 import { Minus, Plus, ShoppingCart, Trash2, CreditCard } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -42,6 +43,7 @@ const CartScreen = () => {
   const [isHutangMode, setIsHutangMode] = useState(false);
   const [showHutangDialog, setShowHutangDialog] = useState(false);
   const [hutangCustomerName, setHutangCustomerName] = useState("");
+  const [customerNameInput, setCustomerNameInput] = useState("");
 
   // FIX QTY/PRICE INPUT: State untuk menyimpan nilai string sementara saat user mengetik
   const [editingQuantities, setEditingQuantities] = useState<Record<string, string>>({});
@@ -141,7 +143,7 @@ const CartScreen = () => {
   // Tambahkan: proses transaksi identik dengan POSScreen (async for IndexedDB)
   const completeTransaction = async () => {
     if (cart.length === 0) return;
-    const products = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
+    const products = getProducts() as Product[];
     const { transaction, updatedProducts } = await completeTransactionUtil({
       cart,
       products,
@@ -152,10 +154,11 @@ const CartScreen = () => {
       total,
       discountPercent: parseFloat(discountPercent) || 0,
       discountAmount,
+      customerName: customerNameInput.trim() || undefined,
     });
 
     // Perbarui produk di UI (CartScreen tidak pegang state products, jadi cukup persist)
-    saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+    setCachedProducts(updatedProducts);
 
     // Simpan total untuk popup
     setLastTransactionTotal(total);
@@ -167,6 +170,7 @@ const CartScreen = () => {
     setShowPaymentForm(false);
     setPaymentError("");
     setIsUangPasSelected(false);
+    setCustomerNameInput("");
 
     // Tampilkan popup sukses
     setShowSuccessPopup(true);
@@ -214,7 +218,7 @@ const CartScreen = () => {
     const itemsList = cart.map(item => `${item.name} (${item.quantity}x)`).join(", ");
 
     // Proses transaksi seperti biasa (dengan payment method "hutang")
-    const products = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
+    const products = getProducts() as Product[];
     const { transaction, updatedProducts } = await completeTransactionUtil({
       cart,
       products,
@@ -240,7 +244,7 @@ const CartScreen = () => {
     });
 
     // Perbarui produk di UI
-    saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+    setCachedProducts(updatedProducts);
 
     // Simpan total untuk popup
     setLastTransactionTotal(total);
@@ -507,6 +511,21 @@ const CartScreen = () => {
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg z-30 pb-20">
         {isCartLoaded && cart.length > 0 && (
           <div className="p-3 space-y-2">
+            {/* Baris 0: Input Nama Pelanggan */}
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs text-blue-500 font-semibold whitespace-nowrap">Nama Pelanggan</span>
+              <div className="flex items-center border rounded bg-white overflow-hidden shadow-sm max-w-[140px]">
+                <input
+                  type="text"
+                  value={customerNameInput}
+                  onChange={e => setCustomerNameInput(e.target.value.toUpperCase())}
+                  onFocus={e => setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300)}
+                  placeholder="Opsional..."
+                  className="w-full px-2 py-1.5 text-xs font-medium focus:ring-1 focus:ring-blue-400 focus:outline-none uppercase"
+                />
+              </div>
+            </div>
+
             {/* Baris 1: Uang Pas (kiri) + Total (tengah) + Hutang (kanan) */}
             <div className="flex items-center justify-between gap-2">
               {/* Uang Pas Button - Left */}
@@ -557,6 +576,10 @@ const CartScreen = () => {
                     setIsHutangMode(true);
                     setIsUangPasSelected(false);
                     setAmountPaid("");
+                    // Auto-fill hutangCustomerName from customerNameInput
+                    if (customerNameInput.trim()) {
+                      setHutangCustomerName(customerNameInput.trim());
+                    }
                     setShowHutangDialog(true);
                   }
                   setPaymentError("");

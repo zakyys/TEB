@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency, normalizeSearch, collapseLeadingZeros, matchesLoose } from "@/lib/utils";
+import { getProducts as getCachedProducts, setProducts as setCachedProducts } from "@/lib/productCache";
 import { useToast } from "@/components/ui/use-toast";
 import type { Product } from "@/types/pos";
 
@@ -127,7 +128,7 @@ const PurchaseInput = () => {
 
     // Load products and history
     useEffect(() => {
-        const storedProducts = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
+        const storedProducts = getCachedProducts() as Product[];
         setProducts(storedProducts);
 
         // Load purchase history
@@ -299,7 +300,7 @@ const PurchaseInput = () => {
         });
 
         setProducts(updatedProducts);
-        saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+        setCachedProducts(updatedProducts);
 
         const purchaseNote: PurchaseNote = {
             id: `PN-${Date.now()}`,

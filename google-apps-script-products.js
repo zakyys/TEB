@@ -358,6 +358,12 @@ function rebuildAllSheet(ss) {
         allSheet.setTabColor("#FF6D00");
     }
 
+    // Hapus proteksi sementara agar script bisa tulis
+    var protections = allSheet.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+    for (var p = 0; p < protections.length; p++) {
+        protections[p].remove();
+    }
+
     // Selalu format ulang header (Row 1-3) + bersihkan sisa lama
     formatSheetHeaders(allSheet);
 
@@ -378,7 +384,11 @@ function rebuildAllSheet(ss) {
         });
     });
 
-    if (allData.length === 0) return;
+    if (allData.length === 0) {
+        // Tetap pasang proteksi walau kosong
+        protectAllSheet(allSheet);
+        return;
+    }
 
     // Pastikan baris cukup
     var maxRows = allSheet.getMaxRows();
@@ -404,6 +414,16 @@ function rebuildAllSheet(ss) {
     allSheet.getRange(DATA_START_ROW, 5, allData.length, 1).setNumberFormat("0");
     allSheet.getRange(DATA_START_ROW, 6, allData.length, 1).setNumberFormat("0.0%");
     allSheet.autoResizeColumns(1, 6);
+
+    // Pasang proteksi setelah selesai tulis
+    protectAllSheet(allSheet);
+}
+
+// Proteksi sheet ALL PRODUK agar tidak bisa diedit manual
+function protectAllSheet(sheet) {
+    var protection = sheet.protect();
+    protection.setDescription("⚠️ JANGAN EDIT DI SINI! Edit harga/stok di sheet kategori (BA, BG, BK, KG, TL)");
+    protection.setWarningOnly(true); // Tampilkan warning tapi tetap bisa diedit (tanpa perlu manage editors)
 }
 
 // Format timestamp
@@ -438,8 +458,8 @@ function onEdit(e) {
         if (val === true) {
             // Reset checkbox dulu
             e.range.setValue(false);
-            // Jalankan undo
-            undoLastPaste();
+            // Jalankan undo tanpa UI (simple trigger tidak bisa akses getUi)
+            undoFromCheckbox(ss, sheet);
         }
         return;
     }
@@ -749,4 +769,72 @@ function undoLastPaste() {
     }
 
     ui.alert("✅ Undo Berhasil!", validData.length + " produk berhasil dikembalikan ke kondisi sebelumnya.", ui.ButtonSet.OK);
+}
+
+// Undo dari checkbox (tanpa UI dialog - untuk simple trigger onEdit)
+function undoFromCheckbox(ss, masterSheet) {
+    var backupSheet = ss.getSheetByName(BACKUP_SHEET);
+
+    if (!backupSheet || backupSheet.getLastRow() < 2) {
+        masterSheet.getRange(1, 1).setValue("❌ Tidak ada backup untuk di-undo");
+        return;
+    }
+
+    // Baca data backup
+    var backupData = backupSheet.getRange(2, 1, backupSheet.getLastRow() - 1, 5).getValues();
+    var validData = backupData.filter(function (row) { return row[0]; });
+
+    if (validData.length === 0) {
+        masterSheet.getRange(1, 1).setValue("❌ Backup kosong, tidak bisa undo");
+        return;
+    }
+
+    // Kelompokkan berdasarkan prefix
+    var grouped = {};
+    CATEGORY_SHEETS.forEach(function (name) { grouped[name] = []; });
+
+    validData.forEach(function (row) {
+        var target = getSheetNameFromCode(row[0]);
+        grouped[target].push(row);
+    });
+
+    // Restore ke masing-masing sheet
+    CATEGORY_SHEETS.forEach(function (name) {
+        var catSheet = ss.getSheetByName(name);
+        if (!catSheet) { catSheet = ss.insertSheet(name); }
+        formatSheetHeaders(catSheet);
+
+        if (catSheet.getLastRow() >= DATA_START_ROW) {
+            catSheet.getRange(DATA_START_ROW, 1, catSheet.getLastRow() - DATA_START_ROW + 1, 6).clearContent();
+        }
+
+        var prods = grouped[name];
+        if (prods.length === 0) return;
+
+        var maxRows = catSheet.getMaxRows();
+        var neededRows = prods.length + DATA_START_ROW;
+        if (neededRows > maxRows) {
+            catSheet.insertRowsAfter(maxRows, neededRows - maxRows + 50);
+        }
+
+        catSheet.getRange(DATA_START_ROW, 1, prods.length, 5).setValues(prods);
+
+        var formulas = [];
+        for (var j = 0; j < prods.length; j++) {
+            var r = DATA_START_ROW + j;
+            formulas.push(["=IF(D" + r + ">0;(D" + r + "-C" + r + ")/D" + r + ";0)"]);
+        }
+        catSheet.getRange(DATA_START_ROW, 6, formulas.length, 1).setFormulas(formulas);
+
+        catSheet.getRange(DATA_START_ROW, 3, prods.length, 1).setNumberFormat("#,##0");
+        catSheet.getRange(DATA_START_ROW, 4, prods.length, 1).setNumberFormat("#,##0");
+        catSheet.getRange(DATA_START_ROW, 5, prods.length, 1).setNumberFormat("0");
+        catSheet.getRange(DATA_START_ROW, 6, prods.length, 1).setNumberFormat("0.0%");
+        catSheet.autoResizeColumns(1, 6);
+    });
+
+    rebuildAllSheet(ss);
+
+    // Update status di MASTER sheet (tanpa popup)
+    masterSheet.getRange(1, 1).setValue("↩️ UNDO BERHASIL! " + validData.length + " produk dikembalikan (" + getTimestampText() + ")");
 }

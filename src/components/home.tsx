@@ -32,6 +32,7 @@ import { Label } from "@/components/ui/label";
 import { useNavigate } from "react-router-dom";
 
 import { formatCurrency, getFromLS, LS_KEYS, getStoreName, getConfig, saveToLS } from "@/lib/utils";
+import { getProducts as getCachedProducts } from "@/lib/productCache";
 import { safeGetAllTransactions, safeInitAndMigrate, getAllTransactions } from "@/lib/indexedDB";
 import { getDailyStatsInRange, addVisitor, addVisitorLost, getVisitorStatsByDate, getLostDescriptionsByDate, removeLastVisitor, removeLastLost, getLostEntriesByDate, removeLostByTimestamp, updateLostDescription, VisitorLostLog, getVisitorStatsByTime, addVisitorBefore12, addVisitorAfter12, removeVisitorBefore12, removeVisitorAfter12 } from "@/lib/visitors";
 import { getRefunds, getExchanges } from "@/lib/exchange";
@@ -57,6 +58,8 @@ interface Transaction {
     sku?: string;
   }[];
   offlineCreated?: boolean;
+  paymentMethod?: string;
+  isHutang?: boolean;
 }
 
 
@@ -192,7 +195,7 @@ const Dashboard = () => {
 
     // Get transactions from IndexedDB
     const storedTransactions = await safeGetAllTransactions();
-    const storedProducts = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
+    const storedProducts = getCachedProducts() as Product[];
     setTransactions(storedTransactions as Transaction[]);
     setProducts(storedProducts);
 
@@ -712,6 +715,32 @@ const Dashboard = () => {
       // ═══════════════════════════════════════════
       // 1. KIRIM DATA PENJUALAN HARIAN KE SHEET
       // ═══════════════════════════════════════════
+
+      // Pre-compute summary untuk GAS
+      const totalSalesForGas = itemsToSend.reduce((sum, item) => sum + item.total, 0);
+      const totalHutangBaruForGas = itemsToSend.filter(i => i.isHutang).reduce((sum, i) => sum + i.total, 0);
+      const totalRefundForGas = refundsToday.reduce((sum, r) => sum + (r.item.quantity * r.item.price), 0);
+
+      const todayNotesForGas = getNotes().filter((n: any) => {
+        const cDate = n.date.split('T')[0];
+        const compDate = n.completedAt ? n.completedAt.split('T')[0] : null;
+        return cDate === todayStr || compDate === todayStr;
+      });
+      // FIX: Belanja hanya dihitung dari yang DIBUAT hari ini, bukan yang auto-completed hari ini
+      const totalBelanjaForGas = getNotes().filter((n: any) => {
+        const cDate = n.date.split('T')[0];
+        return n.type === 'belanja' && cDate === todayStr;
+      }).reduce((sum, n: any) => sum + (n.amount || 0), 0);
+
+      // Pelunasan Hutang: hanya dari hari sebelumnya yang dilunasi hari ini
+      const totalPelunasanForGas = todayNotesForGas.reduce((sum, n: any) => {
+        const isPelunasan = n.type === 'hutang' && n.completed && n.completedAt?.split('T')[0] === todayStr;
+        const isFromPreviousDay = n.date.split('T')[0] < todayStr;
+        return sum + (isPelunasan && isFromPreviousDay ? (n.amount || 0) : 0);
+      }, 0);
+
+      const kasHariIniForGas = totalSalesForGas - todayDiscountInfo.totalAmount - totalBelanjaForGas - totalHutangBaruForGas + totalPelunasanForGas - totalRefundForGas;
+
       const dailyPayload = {
         date: new Date().toLocaleDateString("id-ID", { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
         isUpdate: lastSentDate === todayStr,
@@ -788,7 +817,7 @@ const Dashboard = () => {
           content: n.content,
           amount: n.amount || 0,
           completed: n.completed || false,
-          completedAt: n.completedAt ? new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : null
+          completedAt: n.completedAt ? (n.date.split('T')[0] === n.completedAt.split('T')[0] ? 'HARI INI' : new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '')) : null
         })),
         // Hutang (Piutang) - terpisah dari notes
         hutang: getNotes().filter((n: any) => {
@@ -808,7 +837,7 @@ const Dashboard = () => {
           content: n.content,
           amount: n.amount || 0,
           completed: n.completed || false,
-          completedAt: n.completedAt ? new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : null
+          completedAt: n.completedAt ? (n.date.split('T')[0] === n.completedAt.split('T')[0] ? 'HARI INI' : new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '')) : null
         })),
         // Add exchanges array for LIST TUKAR BARANG table
         exchanges: exchangesToday.map(e => {
@@ -829,13 +858,22 @@ const Dashboard = () => {
           };
         }),
         sendNotification: true, // Tell Google Script to send Telegram message
+        // Summary angka-angka untuk tabel penjualan di Google Sheet
+        summary: {
+          totalSales: totalSalesForGas,
+          totalHutangBaru: totalHutangBaruForGas,
+          totalBelanja: totalBelanjaForGas,
+          totalRefund: totalRefundForGas,
+          totalPelunasan: totalPelunasanForGas,
+          kasHariIni: kasHariIniForGas,
+        },
         // Full Backup for Google Drive (format compatible with Restore)
         fullBackup: {
           type: "full-backup",
           timestamp: new Date().toISOString(),
           version: "2.2",
           data: {
-            products: getFromLS<any[]>(LS_KEYS.PRODUCTS, []),
+            products: getCachedProducts(),
             transactions: transactions,
             profile: getFromLS<any>(LS_KEYS.PROFILE, null),
             visitorsLog: getFromLS<any[]>(LS_KEYS.VISITORS_LOG, []),
@@ -1014,7 +1052,7 @@ const Dashboard = () => {
       const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
       const monthYear = monthNames[now.getMonth()] + " " + now.getFullYear();
 
-      if (monthlyItems.length > 0 || monthlyExchanges.length > 0 || getNotes().length > 0) { // Send if items, exchanges, OR notes exist
+      if (monthlyItems.length > 0 || monthlyExchangesFormatted.length > 0 || getNotes().length > 0) { // Send if items, exchanges, OR notes exist
         const monthlyPayload = {
           action: "monthlyRecap",
           month: monthYear,
@@ -1042,7 +1080,7 @@ const Dashboard = () => {
             content: n.content,
             amount: n.amount || 0,
             completed: n.completed || false,
-            completedAt: n.completedAt ? new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : null
+            completedAt: n.completedAt ? (n.date.split('T')[0] === n.completedAt.split('T')[0] ? 'HARI YG SAMA' : new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '')) : null
           })),
           telegramBotToken: currentConfig.telegramBotToken,
           telegramChatId: currentConfig.telegramChatId,
@@ -1126,9 +1164,13 @@ const Dashboard = () => {
         // Penjualan data
         let totalSalesXlsx = 0;
         let totalHutangBaruXlsx = 0;
+        const hutangRowIndices: number[] = []; // Track baris hutang untuk diwarnai merah
         itemsToSend.forEach(item => {
           // Tandai dengan teks (HUTANG) jika belum dibayar
           const skuDisplay = item.isHutang ? `${item.sku || '-'} (HUTANG)` : (item.sku || '-');
+          if (item.isHutang) {
+            hutangRowIndices.push(salesRows.length); // Simpan index baris ini
+          }
           salesRows.push([skuDisplay, item.quantity, item.price, item.total]);
           totalSalesXlsx += item.total;
           if (item.isHutang) totalHutangBaruXlsx += item.total;
@@ -1144,7 +1186,11 @@ const Dashboard = () => {
           return creationDate === todayStr || completionDate === todayStr;
         });
 
-        const totalBelanjaKasir = todayNotes.reduce((sum, n: any) => sum + (n.type === 'belanja' ? (n.amount || 0) : 0), 0);
+        // FIX: Belanja hanya dari yang DIBUAT hari ini
+        const totalBelanjaKasir = getNotes().filter((n: any) => {
+          const cDate = n.date.split('T')[0];
+          return n.type === 'belanja' && cDate === todayStr;
+        }).reduce((sum, n: any) => sum + (n.amount || 0), 0);
 
         // Pelunasan Hutang: HANYA hitung jika hutangnya dari HARI SEBELUMNYA
         // Ini mencegah uang Si Boy (yang hutang & lunas hari ini) dihitung dua kali
@@ -1159,20 +1205,20 @@ const Dashboard = () => {
 
         salesRows.push(['', '', 'TOTAL :', totalSalesXlsx]);
 
-        if (totalDiscountXlsx > 0) {
-          salesRows.push(['', '', 'TOTAL DISKON :', -totalDiscountXlsx]);
-        }
-        if (totalBelanjaKasir > 0) {
-          salesRows.push(['', '', 'BELANJA KASIR :', -totalBelanjaKasir]);
-        }
         if (totalHutangBaruXlsx > 0) {
           salesRows.push(['', '', 'HUTANG HARI INI :', -totalHutangBaruXlsx]);
         }
+
+        if (totalBelanjaKasir > 0) {
+          salesRows.push(['', '', 'BELANJA KASIR :', -totalBelanjaKasir]);
+        }
+
+        salesRows.push(['', '', 'TOTAL REFUND :', -totalRefundXlsx]);
+
         if (totalPelunasanHutangXlsx > 0) {
           salesRows.push(['', '', 'PELUNASAN HUTANG :', totalPelunasanHutangXlsx]);
         }
 
-        salesRows.push(['', '', 'TOTAL REFUND :', -totalRefundXlsx]);
         salesRows.push(['', '', 'KAS HARI INI :', kasHariIni]);
 
         // --- REFUND BARANG HARI INI (di bawah KAS HARI INI, sama seperti di spreadsheet) ---
@@ -1223,7 +1269,7 @@ const Dashboard = () => {
           salesRows.push(['Tgl', 'Jenis', 'Nama', 'Isi Catatan', 'Jumlah', 'Status', 'Tgl Selesai']);
           notesForXlsx.forEach((n: any) => {
             const status = n.type === 'hutang' ? (n.completed ? 'LUNAS' : 'BELUM BAYAR') : '';
-            const tglSelesai = n.completedAt ? new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : (n.type === 'hutang' ? '-' : '');
+            const tglSelesai = n.completedAt ? (n.date.split('T')[0] === n.completedAt.split('T')[0] ? 'HARI INI' : new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '')) : (n.type === 'hutang' ? '-' : '');
             salesRows.push([
               new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
               n.type.toUpperCase(),
@@ -1242,7 +1288,16 @@ const Dashboard = () => {
           for (let c = 0; c < cols; c++) {
             const addr = XLSX.utils.encode_cell({ r: row, c });
             if (ws[addr]) {
-              ws[addr].s = { font: { bold: true } };
+              ws[addr].s = { ...(ws[addr].s || {}), font: { ...(ws[addr].s?.font || {}), bold: true } };
+            }
+          }
+        };
+        // Red font helper: warnai teks merah untuk baris hutang
+        const redRow = (ws: any, row: number, cols: number) => {
+          for (let c = 0; c < cols; c++) {
+            const addr = XLSX.utils.encode_cell({ r: row, c });
+            if (ws[addr]) {
+              ws[addr].s = { ...(ws[addr].s || {}), font: { ...(ws[addr].s?.font || {}), color: { rgb: 'FF0000' } } };
             }
           }
         };
@@ -1262,9 +1317,17 @@ const Dashboard = () => {
             boldRow(wsSales, idx, 8);
           }
           const val2 = String(row[2] || '');
-          if (val2 === 'TOTAL :' || val2 === 'TOTAL DISKON :' || val2 === 'BELANJA KASIR :' || val2 === 'TOTAL REFUND :' || val2 === 'KAS HARI INI :' || val2 === 'HUTANG HARI INI :' || val2 === 'PELUNASAN HUTANG :') {
+          if (val2 === 'TOTAL :' || val2 === 'BELANJA KASIR :' || val2 === 'TOTAL REFUND :' || val2 === 'KAS HARI INI :' || val2 === 'PELUNASAN HUTANG :' || val2 === 'HUTANG HARI INI :') {
             boldRow(wsSales, idx, 8);
           }
+          // Warnai baris HUTANG HARI INI dengan merah
+          if (val2 === 'HUTANG HARI INI :') {
+            redRow(wsSales, idx, 8);
+          }
+        });
+        // Warnai baris item hutang dengan font merah
+        hutangRowIndices.forEach(rowIdx => {
+          redRow(wsSales, rowIdx, 4);
         });
         XLSX.utils.book_append_sheet(wb, wsSales, "Penjualan");
 
@@ -1349,7 +1412,7 @@ const Dashboard = () => {
           timestamp: now.toISOString(),
           version: "2.1",
           data: {
-            products: getFromLS(LS_KEYS.PRODUCTS, []),
+            products: getCachedProducts(),
             transactions: allTransactionsForBackup,
             profile: getFromLS(LS_KEYS.PROFILE, null),
             visitorsLog: getFromLS(LS_KEYS.VISITORS_LOG, []),

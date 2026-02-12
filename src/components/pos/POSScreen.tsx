@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency, getStoreName, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
+import { getProducts as getCachedProducts, setProducts as setCachedProducts } from "@/lib/productCache";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -76,8 +77,8 @@ const ScannerPreview = ({
             BarcodeFormat.CODE_39
           ]);
 
-          // Scan interval 400ms - balanced performance
-          const codeReader = new BrowserMultiFormatReader(hints, 400);
+          // Scan interval handled by decodeFromConstraints
+          const codeReader = new BrowserMultiFormatReader(hints);
           codeReaderRef.current = codeReader;
 
           const videoInputDevices = await BrowserMultiFormatReader.listVideoInputDevices();
@@ -182,9 +183,9 @@ const POSScreen = () => {
 
   useEffect(() => {
     // Load products from localStorage or use default data if empty
-    const storedProducts = getFromLS<Product[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+    const storedProducts = getCachedProducts() as Product[];
     if (storedProducts.length === 0) {
-      saveToLS(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+      setCachedProducts(DUMMY_PRODUCTS);
       setProducts(DUMMY_PRODUCTS);
     } else {
       setProducts(storedProducts);
@@ -197,11 +198,11 @@ const POSScreen = () => {
         if (updated && Array.isArray(updated)) {
           setProducts(updated);
         } else {
-          const stored = getFromLS<Product[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+          const stored = getCachedProducts() as Product[];
           setProducts(stored);
         }
       } catch {
-        const stored = getFromLS<Product[]>(LS_KEYS.PRODUCTS, DUMMY_PRODUCTS);
+        const stored = getCachedProducts() as Product[];
         setProducts(stored);
       }
     };

@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Search, ArrowLeftRight, Trash2, Calendar, Package } from "lucide-react";
-import { formatCurrency, getFromLS, LS_KEYS } from "@/lib/utils";
+import { formatCurrency, getFromLS, saveToLS, LS_KEYS } from "@/lib/utils";
+import { getProducts, setProducts as setCachedProducts } from "@/lib/productCache";
 import {
     getExchanges,
     addExchange,
@@ -15,6 +16,7 @@ import {
     ExchangeRecord,
     ExchangeItem
 } from "@/lib/exchange";
+import { safeGetAllTransactions, safeSaveTransaction } from "@/lib/indexedDB";
 
 interface Transaction {
     id: string;
@@ -77,13 +79,13 @@ const ExchangePage = () => {
     };
 
     // Search transactions by SKU/code
-    const handleSearch = () => {
+    const handleSearch = async () => {
         if (!searchCode.trim()) {
             setSearchResults([]);
             return;
         }
 
-        const transactions = getFromLS<Transaction[]>(LS_KEYS.TRANSACTIONS, []);
+        const transactions = await safeGetAllTransactions() as Transaction[];
         const results: { transaction: Transaction, item: Transaction['items'][0], itemIndex: number }[] = [];
 
         transactions.forEach(t => {
@@ -110,7 +112,7 @@ const ExchangePage = () => {
             return;
         }
 
-        const products = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
+        const products = getProducts() as Product[];
         const results = products.filter(p =>
             p.sku?.toLowerCase().includes(query.toLowerCase()) ||
             p.name?.toLowerCase().includes(query.toLowerCase())
@@ -130,7 +132,7 @@ const ExchangePage = () => {
     };
 
     // Process exchange
-    const processExchange = () => {
+    const processExchange = async () => {
         if (!selectedItem || !selectedNewItem) return;
 
         const originalItem: ExchangeItem = {
@@ -160,7 +162,7 @@ const ExchangePage = () => {
         });
 
         // Update stock (return original, deduct new)
-        const products = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
+        const products = getProducts() as Product[];
         const updatedProducts = products.map(p => {
             if (p.sku === originalItem.sku && p.stock !== undefined) {
                 return { ...p, stock: p.stock + exchangeQty };
@@ -170,12 +172,11 @@ const ExchangePage = () => {
             }
             return p;
         });
-        localStorage.setItem(LS_KEYS.PRODUCTS, JSON.stringify(updatedProducts));
+        setCachedProducts(updatedProducts);
 
         // Create adjustment transaction if there's a price difference
         if (priceDiff !== 0) {
-            const transactions = getFromLS<Transaction[]>(LS_KEYS.TRANSACTIONS, []);
-            const adjustmentTransaction: Transaction = {
+            const adjustmentTransaction = {
                 id: `ADJ-${Date.now().toString().substring(6)}`,
                 date: new Date().toISOString(),
                 customer: 'Tukar Barang',
@@ -190,8 +191,7 @@ const ExchangePage = () => {
                     sku: exchangeRecord.id
                 }]
             };
-            transactions.push(adjustmentTransaction);
-            localStorage.setItem(LS_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+            await safeSaveTransaction(adjustmentTransaction);
         }
 
         setExchangeDialogOpen(false);

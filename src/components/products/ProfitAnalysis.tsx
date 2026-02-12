@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { getFromLS, LS_KEYS, formatCurrency, saveToLS } from "@/lib/utils";
+import { getProducts as getCachedProducts, setProducts as setCachedProducts } from "@/lib/productCache";
 import { ArrowLeft, TrendingUp, Edit2, Check, X, Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,7 +30,7 @@ const ProfitAnalysis = ({ onBack }: { onBack: () => void }) => {
     const ITEMS_PER_PAGE = 100;
 
     useEffect(() => {
-        const storedProducts = getFromLS<Product[]>(LS_KEYS.PRODUCTS, []);
+        const storedProducts = getCachedProducts() as Product[];
         setProducts(storedProducts);
     }, []);
 
@@ -41,7 +42,7 @@ const ProfitAnalysis = ({ onBack }: { onBack: () => void }) => {
                 : p
         );
         setProducts(updatedProducts);
-        saveToLS(LS_KEYS.PRODUCTS, updatedProducts);
+        setCachedProducts(updatedProducts);
 
         // Dispatch event for other components
         window.dispatchEvent(new Event('products-updated'));

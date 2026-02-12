@@ -1,6 +1,7 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { getAllTransactions, saveAllTransactions, clearAllTransactions, initDB } from "./indexedDB";
+import { getProducts, setProducts } from "./productCache";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -53,7 +54,7 @@ export function formatCurrency(amount: number): string {
 export function backupData(): string {
   try {
     const dataToBackup = {
-      products: getFromLS(LS_KEYS.PRODUCTS, []),
+      products: getProducts(),
       transactions: getFromLS(LS_KEYS.TRANSACTIONS, []),
       profile: getFromLS(LS_KEYS.PROFILE, null),
     };
@@ -81,8 +82,8 @@ export function restoreData(backupString: string): void {
       throw new Error("Format data backup tidak valid");
     }
 
-    // Restore data to localStorage
-    saveToLS(LS_KEYS.PRODUCTS, parsedData.products);
+    // Restore products via product cache (persists to IndexedDB + memory)
+    setProducts(parsedData.products);
     saveToLS(LS_KEYS.TRANSACTIONS, parsedData.transactions);
 
     if (parsedData.profile) {
@@ -97,7 +98,7 @@ export function restoreData(backupString: string): void {
 // Backup products only as downloadable JSON file
 export function backupProductsToFile(): void {
   try {
-    const products = getFromLS(LS_KEYS.PRODUCTS, []);
+    const products = getProducts();
     const backupData = {
       type: "products-only",
       timestamp: new Date().toISOString(),
@@ -131,7 +132,7 @@ export function backupProductsToFile(): void {
 // Generate backup file object (for sharing, not downloading)
 export function generateBackupFileObject(): File {
   try {
-    const products = getFromLS(LS_KEYS.PRODUCTS, []);
+    const products = getProducts();
     const backupData = {
       type: "products-only",
       timestamp: new Date().toISOString(),
@@ -219,7 +220,7 @@ export async function backupAllDataToFile(): Promise<void> {
       timestamp: new Date().toISOString(),
       version: "2.2", // Upgraded version with Multi-Toko connection
       data: {
-        products: getFromLS(LS_KEYS.PRODUCTS, []),
+        products: getProducts(),
         transactions: allTransactions, // From IndexedDB
         profile: getFromLS(LS_KEYS.PROFILE, null),
         visitorsLog: getFromLS(LS_KEYS.VISITORS_LOG, []),
@@ -281,7 +282,7 @@ export function restoreFromFile(file: File): Promise<void> {
           if (!Array.isArray(backupData.data.products)) {
             throw new Error("Data produk tidak valid");
           }
-          saveToLS(LS_KEYS.PRODUCTS, backupData.data.products);
+          setProducts(backupData.data.products);
 
         } else if (backupData.type === "full-backup") {
           if (!Array.isArray(backupData.data.products) ||
@@ -289,8 +290,8 @@ export function restoreFromFile(file: File): Promise<void> {
             throw new Error("Data backup lengkap tidak valid");
           }
 
-          // Restore products to localStorage
-          saveToLS(LS_KEYS.PRODUCTS, backupData.data.products);
+          // Restore products via product cache
+          setProducts(backupData.data.products);
 
           // Restore transactions to both localStorage AND IndexedDB
           saveToLS(LS_KEYS.TRANSACTIONS, backupData.data.transactions);
@@ -447,14 +448,14 @@ export function validateAndFixData(): { fixed: boolean; issues: string[] } {
 
   // Check products
   try {
-    const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
+    const products = getProducts();
     if (!Array.isArray(products)) {
-      saveToLS(LS_KEYS.PRODUCTS, []);
+      setProducts([]);
       issues.push("Products data was corrupted - reset to empty");
       fixed = true;
     }
   } catch (e) {
-    saveToLS(LS_KEYS.PRODUCTS, []);
+    setProducts([]);
     issues.push("Products parse error - reset to empty");
     fixed = true;
   }
@@ -478,7 +479,7 @@ export async function archiveOldTransactions(keepDays: number = 60): Promise<{ a
     transactions = getFromLS<any[]>(LS_KEYS.TRANSACTIONS, []);
   }
 
-  const products = getFromLS<any[]>(LS_KEYS.PRODUCTS, []);
+  const products = getProducts();
 
   // Helper to return stock for transactions
   const returnStockForTransactions = (transactionsToDelete: any[]) => {
@@ -495,7 +496,7 @@ export async function archiveOldTransactions(keepDays: number = 60): Promise<{ a
         });
       }
     });
-    saveToLS(LS_KEYS.PRODUCTS, products);
+    setProducts(products);
   };
 
   // Helper to save transactions to IndexedDB
@@ -824,7 +825,7 @@ export async function sendBackupAsTextToTelegram(): Promise<{ success: boolean; 
       timestamp: new Date().toISOString(),
       version: "2.0",
       data: {
-        products: getFromLS(LS_KEYS.PRODUCTS, []),
+        products: getProducts(),
         transactions: allTransactions,
         profile: getFromLS(LS_KEYS.PROFILE, null),
         visitorsLog: getFromLS(LS_KEYS.VISITORS_LOG, []),

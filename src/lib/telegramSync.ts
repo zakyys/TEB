@@ -4,6 +4,8 @@
  */
 
 import { getConfig } from './utils';
+import { safeGetAllTransactions } from './indexedDB';
+import { getProducts } from './productCache';
 
 const LS_KEY_CHANNEL_ID = 'TELEGRAM_CHANNEL_ID'
 const LS_KEY_LAST_SYNC = 'TELEGRAM_LAST_SYNC'
@@ -161,9 +163,9 @@ class POSTelegramAutoSync {
         }
 
         try {
-            // Get data from localStorage
-            const products = JSON.parse(localStorage.getItem('PRODUCTS') || '[]')
-            const transactions = JSON.parse(localStorage.getItem('TRANSACTIONS') || '[]')
+            // Get data from localStorage and IndexedDB
+            const products = getProducts()
+            const transactions = await safeGetAllTransactions()
             const profile = JSON.parse(localStorage.getItem('bengkel_profile') || '{}')
 
             const today = this.getTodayString()
