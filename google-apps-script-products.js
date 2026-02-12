@@ -25,7 +25,63 @@ function onOpen() {
     SpreadsheetApp.getUi()
         .createMenu("📋 MASTER")
         .addItem("↩️ Undo Terakhir", "undoLastPaste")
+        .addSeparator()
+        .addItem("🔄 Rebuild ALL PRODUK", "rebuildManual")
+        .addSeparator()
+        .addItem("⚙️ Setup Auto-Sync (1x saja)", "setupTriggers")
         .addToUi();
+}
+
+// Manual rebuild ALL PRODUK (dari menu)
+function rebuildManual() {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    rebuildAllSheet(ss);
+    SpreadsheetApp.getUi().alert(
+        "✅ Rebuild Selesai!",
+        "ALL PRODUK sudah di-sync ulang dari semua sheet kategori.",
+        SpreadsheetApp.getUi().ButtonSet.OK
+    );
+}
+
+// Setup installable trigger untuk deteksi hapus baris
+// ⚠️ JALANKAN 1x SAJA dari menu: MASTER → Setup Auto-Sync
+function setupTriggers() {
+    var ss = SpreadsheetApp.getActive();
+
+    // Hapus trigger lama yg sama (mencegah duplikat)
+    var triggers = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < triggers.length; i++) {
+        if (triggers[i].getHandlerFunction() === "onSheetChange") {
+            ScriptApp.deleteTrigger(triggers[i]);
+        }
+    }
+
+    // Buat trigger baru: onChange (deteksi hapus/insert baris)
+    ScriptApp.newTrigger("onSheetChange")
+        .forSpreadsheet(ss)
+        .onChange()
+        .create();
+
+    SpreadsheetApp.getUi().alert(
+        "✅ Setup Berhasil!",
+        "Auto-sync sudah aktif!\n\nSekarang jika Anda menghapus baris di sheet kategori (BA/BG/BK/KG/TL), ALL PRODUK akan otomatis ter-update.\n\n⚠️ Tidak perlu jalankan ini lagi.",
+        SpreadsheetApp.getUi().ButtonSet.OK
+    );
+}
+
+// onChange handler - terpicu saat baris dihapus/ditambah
+// (onEdit TIDAK terpicu untuk delete row, makanya perlu ini)
+function onSheetChange(e) {
+    if (!e) return;
+    var changeType = e.changeType;
+
+    // Hanya proses jika ada perubahan struktur (insert/remove rows/columns)
+    if (changeType === "INSERT_ROW" || changeType === "REMOVE_ROW" ||
+        changeType === "INSERT_COLUMN" || changeType === "REMOVE_COLUMN" ||
+        changeType === "OTHER") {
+        var ss = SpreadsheetApp.getActiveSpreadsheet();
+        rebuildAllSheet(ss);
+    }
 }
 
 function getSheetNameFromCode(kode) {
