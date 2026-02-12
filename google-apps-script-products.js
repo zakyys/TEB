@@ -558,17 +558,65 @@ function onEdit(e) {
 
     // =========================================
     // HANDLE: Edit manual di sheet kategori
-    // → Selalu REBUILD ALL PRODUK dari scratch
-    //   agar tidak ada duplikat saat kode diedit
+    // SMART REBUILD: 
+    //   - Edit KODE (kolom A) → rebuild total (mencegah duplikat)
+    //   - Hapus produk (kode kosong) → rebuild total
+    //   - Edit nama/harga/stok (kolom B-E) → update cepat per baris
     // =========================================
     if (CATEGORY_SHEETS.indexOf(sheetName) === -1) return;
 
     var editedRow = e.range.getRow();
+    var editedCol = e.range.getColumn();
     if (editedRow < DATA_START_ROW) return;
 
-    // Rebuild ALL PRODUK dari semua sheet kategori (BA, BG, BK, KG, TL)
-    // Ini menjamin data selalu sinkron tanpa risiko duplikat
-    rebuildAllSheet(ss);
+    // Cek apakah yang diedit adalah kolom KODE (kolom A = 1)
+    var isKodeEdited = (editedCol === 1);
+
+    // Cek apakah kode sekarang kosong (produk dihapus)
+    var kode = sheet.getRange(editedRow, 1).getValue();
+    var kodeKosong = (!kode || String(kode).trim() === "");
+
+    // CASE 1: Kode diedit ATAU kode kosong → REBUILD total
+    if (isKodeEdited || kodeKosong) {
+        rebuildAllSheet(ss);
+        return;
+    }
+
+    // CASE 2: Edit kolom lain (nama/harga/stok) → UPDATE CEPAT per baris
+    var allSheet = ss.getSheetByName(ALL_SHEET);
+    if (!allSheet) return;
+
+    var kodeStr = String(kode).toUpperCase();
+    var nama = sheet.getRange(editedRow, 2).getValue();
+    var hargaBeli = sheet.getRange(editedRow, 3).getValue();
+    var hargaJual = sheet.getRange(editedRow, 4).getValue();
+    var stok = sheet.getRange(editedRow, 5).getValue();
+
+    var lastRow = allSheet.getLastRow();
+    if (lastRow < DATA_START_ROW) {
+        // ALL PRODUK kosong, rebuild saja
+        rebuildAllSheet(ss);
+        return;
+    }
+
+    // Cari baris di ALL PRODUK berdasarkan kode
+    var allData = allSheet.getRange(DATA_START_ROW, 1, lastRow - DATA_START_ROW + 1, 1).getValues();
+    var foundRow = -1;
+    for (var i = 0; i < allData.length; i++) {
+        if (String(allData[i][0]).toUpperCase() === kodeStr) {
+            foundRow = DATA_START_ROW + i;
+            break;
+        }
+    }
+
+    if (foundRow > 0) {
+        // Update baris yang sudah ada (CEPAT - hanya 1 baris)
+        allSheet.getRange(foundRow, 1, 1, 5).setValues([[kode, nama, hargaBeli, hargaJual, stok]]);
+    } else {
+        // Kode tidak ditemukan di ALL PRODUK (seharusnya tidak terjadi)
+        // Fallback: rebuild untuk memastikan sinkron
+        rebuildAllSheet(ss);
+    }
 }
 
 // Format sheet MASTER
