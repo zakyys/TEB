@@ -558,53 +558,17 @@ function onEdit(e) {
 
     // =========================================
     // HANDLE: Edit manual di sheet kategori
+    // → Selalu REBUILD ALL PRODUK dari scratch
+    //   agar tidak ada duplikat saat kode diedit
     // =========================================
     if (CATEGORY_SHEETS.indexOf(sheetName) === -1) return;
 
     var editedRow = e.range.getRow();
     if (editedRow < DATA_START_ROW) return;
 
-    var allSheet = ss.getSheetByName(ALL_SHEET);
-    if (!allSheet) return;
-
-    var kode = sheet.getRange(editedRow, 1).getValue();
-
-    if (!kode) {
-        rebuildAllSheet(ss);
-        return;
-    }
-
-    var kodeStr = String(kode).toUpperCase();
-    var validPattern = new RegExp("^" + sheetName + "-[0-9]{4}[A-Z]*$");
-    if (!validPattern.test(kodeStr)) {
-        return;
-    }
-
-    var nama = sheet.getRange(editedRow, 2).getValue();
-    var hargaBeli = sheet.getRange(editedRow, 3).getValue();
-    var hargaJual = sheet.getRange(editedRow, 4).getValue();
-    var stok = sheet.getRange(editedRow, 5).getValue();
-
-    var lastRow = allSheet.getLastRow();
-    var foundRow = -1;
-    if (lastRow >= DATA_START_ROW) {
-        var allData = allSheet.getRange(DATA_START_ROW, 1, lastRow - DATA_START_ROW + 1, 1).getValues();
-        for (var i = 0; i < allData.length; i++) {
-            if (String(allData[i][0]).toUpperCase() === kodeStr) {
-                foundRow = DATA_START_ROW + i;
-                break;
-            }
-        }
-    }
-
-    if (foundRow > 0) {
-        allSheet.getRange(foundRow, 1, 1, 5).setValues([[kode, nama, hargaBeli, hargaJual, stok]]);
-        allSheet.getRange(foundRow, 6).setFormula("=IF(D" + foundRow + ">0;(D" + foundRow + "-C" + foundRow + ")/D" + foundRow + ";0)");
-    } else {
-        var newRow = Math.max(allSheet.getLastRow() + 1, DATA_START_ROW);
-        allSheet.getRange(newRow, 1, 1, 5).setValues([[kode, nama, hargaBeli, hargaJual, stok]]);
-        allSheet.getRange(newRow, 6).setFormula("=IF(D" + newRow + ">0;(D" + newRow + "-C" + newRow + ")/D" + newRow + ";0)");
-    }
+    // Rebuild ALL PRODUK dari semua sheet kategori (BA, BG, BK, KG, TL)
+    // Ini menjamin data selalu sinkron tanpa risiko duplikat
+    rebuildAllSheet(ss);
 }
 
 // Format sheet MASTER
