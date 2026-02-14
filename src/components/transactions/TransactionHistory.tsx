@@ -462,7 +462,7 @@ const TransactionHistory: React.FC = () => {
       setTransactions(updatedTransactions);
       safeSaveAllTransactions(updatedTransactions);
 
-      // If this was a different-day refund, also delete the refund record and reduce stock
+      // If this was a different-day refund, also delete the refund record
       if ((itemToDelete as any).refunded && !(itemToDelete as any).sameDayRefunded) {
         // Find and delete refund record matching this item
         const refunds = getRefunds();
@@ -475,16 +475,18 @@ const TransactionHistory: React.FC = () => {
           deleteRefund(matchingRefund.id);
           setRefundHistory(getRefunds()); // Refresh list
         }
+      }
 
-        // Reduce stock (refund was returned, now we're undoing it)
-        const products = getProducts();
-        const productIndex = products.findIndex(p => p.sku === itemToDelete.sku || p.name === itemToDelete.name);
-        if (productIndex !== -1 && products[productIndex].stock !== undefined) {
-          products[productIndex].stock -= itemToDelete.quantity || 1;
-          setProducts(products);
-          // ★ Push stock to Sheet (bidirectional sync)
-          pushStockToSheet([{ sku: products[productIndex].sku, stock: products[productIndex].stock }]);
-        }
+      // ★ Reduce stock for ALL refund cancellations (same-day AND different-day)
+      // Refund added stock, so cancelling must subtract it back
+      const products = getProducts();
+      const productIndex = products.findIndex(p => p.sku === itemToDelete.sku || p.name === itemToDelete.name);
+      if (productIndex !== -1 && products[productIndex].stock !== undefined) {
+        const qtyToReduce = (itemToDelete as any).refundedQty || itemToDelete.quantity || 1;
+        products[productIndex].stock -= qtyToReduce;
+        setProducts(products);
+        // Push stock to Sheet (bidirectional sync)
+        pushStockToSheet([{ sku: products[productIndex].sku, stock: products[productIndex].stock }]);
       }
 
       // Trigger flash animation
