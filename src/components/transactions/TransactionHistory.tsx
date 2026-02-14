@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState, useRef, useCallback } from "react"
 import { useLocation } from "react-router-dom";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
 import { safeGetAllTransactions, safeSaveAllTransactions, safeInitAndMigrate } from "@/lib/indexedDB";
-import { getProducts, setProducts } from "@/lib/productCache";
+import { getProducts, setProducts, pushStockToSheet } from "@/lib/productCache";
 import { DUMMY_TRANSACTIONS, DUMMY_PRODUCTS } from "@/lib/dummyData";
 import { Search, Calendar, Printer, RotateCcw, ChevronRight, ChevronLeft, Info, X, ArrowRight, Banknote, RefreshCw, ShoppingCart, Pencil, Trash2, Minus, Plus, ScanBarcode, Tag } from "lucide-react";
 import { BrowserMultiFormatReader } from '@zxing/browser';
@@ -482,6 +482,8 @@ const TransactionHistory: React.FC = () => {
         if (productIndex !== -1 && products[productIndex].stock !== undefined) {
           products[productIndex].stock -= itemToDelete.quantity || 1;
           setProducts(products);
+          // ★ Push stock to Sheet (bidirectional sync)
+          pushStockToSheet([{ sku: products[productIndex].sku, stock: products[productIndex].stock }]);
         }
       }
 
@@ -644,6 +646,9 @@ const TransactionHistory: React.FC = () => {
       setProducts(updatedProducts);
       window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
 
+      // ★ Push stock to Sheet (bidirectional sync)
+      pushStockToSheet([{ sku, stock: updatedProducts.find((p: any) => p.sku === sku)?.stock ?? 0 }]);
+
       // Smart refund logic (already checked at function start)
       if (isSameDayRefund) {
         // Same day: Mark item as refunded or split for partial refund
@@ -796,6 +801,16 @@ const TransactionHistory: React.FC = () => {
 
       // Write all stock changes once
       setProducts(currentProducts);
+
+      // ★ Push stock to Sheet (bidirectional sync)
+      const stockUpdates = selectedTransaction.items
+        .filter(item => item.sku && item.sku !== '-')
+        .map(item => {
+          const prod = currentProducts.find((p: any) => p.sku === item.sku);
+          return prod ? { sku: prod.sku, stock: prod.stock ?? 0 } : null;
+        })
+        .filter(Boolean) as Array<{ sku: string; stock: number }>;
+      if (stockUpdates.length > 0) pushStockToSheet(stockUpdates);
       window.dispatchEvent(new CustomEvent('pos:products:update', { detail: currentProducts }));
 
       // Smart refund logic for full refund (already checked at function start)
@@ -1196,6 +1211,8 @@ const TransactionHistory: React.FC = () => {
     });
     setProducts(updatedProducts);
     window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
+    // ★ Push stock to Sheet (bidirectional sync)
+    pushStockToSheet([{ sku: refund.item.sku, stock: updatedProducts.find((p: any) => p.sku === refund.item.sku)?.stock ?? 0 }]);
 
     // Delete the refund record
     deleteRefund(refund.id);

@@ -204,25 +204,40 @@ const ProductManagement = () => {
           }
         };
 
-        // FULL REPLACE: Data HP mengikuti Sheet sepenuhnya
-        const sheetProducts: Product[] = data.products.map((sheetProd: any) => ({
-          id: `prod-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          sku: String(sheetProd.kode || "").toUpperCase(),
-          name: sheetProd.nama || "",
-          category: getCategoryFromCode(sheetProd.kode || ""),
-          price: Number(sheetProd.hargaJual) || 0,
-          purchasePrice: Number(sheetProd.hargaBeli) || 0,
-          stock: Number(sheetProd.stok) || 0,
-          type: "product",
-          threshold: 5
-        }));
+        // Build lookup map of current local products (by SKU) to preserve stock
+        const localProducts = getCachedProducts();
+        const localStockMap = new Map<string, { stock: number; id: string }>();
+        localProducts.forEach((p: any) => {
+          if (p.sku) {
+            localStockMap.set(p.sku.toUpperCase(), { stock: p.stock ?? 0, id: p.id });
+          }
+        });
+
+        // MERGE: Take name/price from Sheet, but KEEP stock from local HP
+        const sheetProducts: Product[] = data.products.map((sheetProd: any) => {
+          const sku = String(sheetProd.kode || "").toUpperCase();
+          const localData = localStockMap.get(sku);
+
+          return {
+            id: localData?.id || `prod-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            sku,
+            name: sheetProd.nama || "",
+            category: getCategoryFromCode(sheetProd.kode || ""),
+            price: Number(sheetProd.hargaJual) || 0,
+            purchasePrice: Number(sheetProd.hargaBeli) || 0,
+            // ★ KEEP local stock if product exists locally, otherwise use Sheet stock
+            stock: localData !== undefined ? localData.stock : (Number(sheetProd.stok) || 0),
+            type: "product",
+            threshold: 5
+          };
+        });
 
         setCachedProducts(sheetProducts);
         setProducts(sheetProducts);
         try { window.dispatchEvent(new CustomEvent('pos:products:update', { detail: sheetProducts })); } catch { }
 
         if (!isAuto) {
-          alert(`✅ Sinkronisasi Berhasil!\n\n${sheetProducts.length} produk di HP sekarang sama persis dengan yang ada di Google Sheet.`);
+          alert(`✅ Sinkronisasi Berhasil!\n\n${sheetProducts.length} produk di HP diperbarui (nama & harga dari Sheet, stok tetap dari HP).`);
           setSyncMessage(`✓ Berhasil sync ${sheetProducts.length} produk`);
         }
         setTimeout(() => setSyncMessage(""), 5000);

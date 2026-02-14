@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency, getStoreName, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
-import { getProducts as getCachedProducts, setProducts as setCachedProducts } from "@/lib/productCache";
+import { getProducts as getCachedProducts, setProducts as setCachedProducts, pushStockToSheet } from "@/lib/productCache";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -383,6 +383,18 @@ const POSScreen = () => {
     })
 
     setProducts(updatedProducts)
+
+    // ★ Push stock changes to Google Sheet (bidirectional sync)
+    const stockUpdates = cart
+      .filter(i => i.type === 'product' && i.sku && i.sku !== '-')
+      .map(cartItem => {
+        const prod = updatedProducts.find((p: any) => p.sku === cartItem.sku);
+        return prod ? { sku: prod.sku, stock: prod.stock ?? 0 } : null;
+      })
+      .filter(Boolean) as Array<{ sku: string; stock: number }>;
+    if (stockUpdates.length > 0) {
+      pushStockToSheet(stockUpdates);
+    }
 
     const generatedReceiptText = generateTextReceipt(transaction)
     setReceiptContent(generatedReceiptText)

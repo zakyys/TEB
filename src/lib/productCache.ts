@@ -258,3 +258,73 @@ export function findProductByName(name: string): any | undefined {
     if (!productCache) return undefined;
     return productCache.find(p => p.name === name);
 }
+
+// ============ Push Stock to Sheet (Bidirectional Sync) ============
+
+let pendingStockUpdates: Map<string, number> = new Map();
+let stockPushTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Queue stock changes to be pushed to Google Sheet.
+ * Debounced (2s) to batch multiple changes (e.g., from a single transaction with many items).
+ * 
+ * @param updates - Array of {sku, stock} to push
+ */
+export function pushStockToSheet(updates: Array<{ sku: string; stock: number }>): void {
+    // Accumulate updates (later values overwrite earlier for same SKU)
+    for (const u of updates) {
+        if (u.sku && u.sku !== '-') {
+            pendingStockUpdates.set(u.sku, u.stock);
+        }
+    }
+
+    // Debounce: wait 2s for more updates before sending
+    if (stockPushTimer) {
+        clearTimeout(stockPushTimer);
+    }
+
+    stockPushTimer = setTimeout(() => {
+        _flushStockToSheet();
+    }, 2000);
+}
+
+async function _flushStockToSheet(): Promise<void> {
+    if (pendingStockUpdates.size === 0) return;
+
+    // Take snapshot and clear pending
+    const updates = Array.from(pendingStockUpdates.entries()).map(([kode, stok]) => ({
+        kode,
+        stok
+    }));
+    pendingStockUpdates.clear();
+
+    try {
+        // Get the product GAS URL (keys match LS_KEYS in utils.ts)
+        const configStr = localStorage.getItem('pos_product_gas_url') || localStorage.getItem('pos_gas_url');
+        if (!configStr) {
+            console.log('[StockSync] No GAS URL configured, skipping push');
+            return;
+        }
+
+        console.log(`[StockSync] Pushing ${updates.length} stock updates to Sheet...`);
+
+        await fetch(configStr, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({
+                action: "batchUpdateStock",
+                updates: updates
+            })
+        });
+
+        console.log(`[StockSync] ✓ ${updates.length} stock updates pushed successfully`);
+    } catch (err) {
+        console.error('[StockSync] Failed to push stock to Sheet:', err);
+        // Re-queue failed updates so they can be retried
+        for (const u of updates) {
+            if (!pendingStockUpdates.has(u.kode)) {
+                pendingStockUpdates.set(u.kode, u.stok);
+            }
+        }
+    }
+}

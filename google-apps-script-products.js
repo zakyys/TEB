@@ -299,6 +299,69 @@ function doPost(e) {
             });
         }
 
+        // =====================================================
+        // 5. BATCH UPDATE STOK (dari HP setelah jual/refund)
+        //    Hanya update kolom Stok, TIDAK ubah nama/harga
+        // =====================================================
+        if (action === "batchUpdateStock") {
+            var stockUpdates = data.updates || []; // [{kode: "BG-001", stok: 50}, ...]
+            if (stockUpdates.length === 0) return createJsonResponse({ success: false, error: "Tidak ada data stok" });
+
+            var updatedCount = 0;
+
+            // Kelompokkan updates berdasarkan sheet
+            var grouped = {};
+            CATEGORY_SHEETS.forEach(function (name) { grouped[name] = []; });
+            stockUpdates.forEach(function (u) {
+                var sheetName = getSheetNameFromCode(u.kode);
+                grouped[sheetName].push(u);
+            });
+
+            // Update stok per sheet (hanya kolom E / kolom 5)
+            CATEGORY_SHEETS.forEach(function (name) {
+                var updates = grouped[name];
+                if (updates.length === 0) return;
+
+                var sheet = ss.getSheetByName(name);
+                if (!sheet) return;
+
+                var lastRow = sheet.getLastRow();
+                if (lastRow < DATA_START_ROW) return;
+
+                // Baca kolom A (kode) dan E (stok) sekaligus
+                var codes = sheet.getRange(DATA_START_ROW, 1, lastRow - DATA_START_ROW + 1, 1).getValues();
+                var stocks = sheet.getRange(DATA_START_ROW, 5, lastRow - DATA_START_ROW + 1, 1).getValues();
+                var changed = false;
+
+                updates.forEach(function (u) {
+                    var targetCode = String(u.kode).toUpperCase();
+                    for (var i = 0; i < codes.length; i++) {
+                        if (String(codes[i][0]).toUpperCase() === targetCode) {
+                            stocks[i][0] = u.stok;
+                            updatedCount++;
+                            changed = true;
+                            break;
+                        }
+                    }
+                });
+
+                // Tulis balik kolom stok sekaligus (1 write per sheet, bukan per produk)
+                if (changed) {
+                    sheet.getRange(DATA_START_ROW, 5, stocks.length, 1).setValues(stocks);
+                }
+            });
+
+            // Rebuild ALL PRODUK supaya stok ter-update juga di sana
+            rebuildAllSheet(ss);
+
+            return createJsonResponse({
+                success: true,
+                message: updatedCount + " stok diperbarui",
+                updated: updatedCount,
+                total: stockUpdates.length
+            });
+        }
+
     } catch (error) {
         return createJsonResponse({ success: false, error: error.toString() });
     }
