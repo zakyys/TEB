@@ -204,7 +204,7 @@ const ProductManagement = () => {
           }
         };
 
-        // Build lookup map of current local products (by SKU) to preserve stock
+        // Build lookup map of current local products (by SKU) to preserve stock during auto-sync
         const localProducts = getCachedProducts();
         const localStockMap = new Map<string, { stock: number; id: string }>();
         localProducts.forEach((p: any) => {
@@ -213,10 +213,14 @@ const ProductManagement = () => {
           }
         });
 
-        // MERGE: Take name/price from Sheet, but KEEP stock from local HP
+        // MERGE: Take name/price from Sheet
+        // Stock strategy:
+        //   - Auto-sync (background): KEEP local stock (prevent silent overwrite from stale Sheet)
+        //   - Manual sync (user clicks): TAKE Sheet stock (user intentionally wants Sheet data)
         const sheetProducts: Product[] = data.products.map((sheetProd: any) => {
           const sku = String(sheetProd.kode || "").toUpperCase();
           const localData = localStockMap.get(sku);
+          const sheetStock = Number(sheetProd.stok) || 0;
 
           return {
             id: localData?.id || `prod-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -225,8 +229,8 @@ const ProductManagement = () => {
             category: getCategoryFromCode(sheetProd.kode || ""),
             price: Number(sheetProd.hargaJual) || 0,
             purchasePrice: Number(sheetProd.hargaBeli) || 0,
-            // ★ KEEP local stock if product exists locally, otherwise use Sheet stock
-            stock: localData !== undefined ? localData.stock : (Number(sheetProd.stok) || 0),
+            // ★ Auto-sync: keep local stock | Manual sync: take Sheet stock
+            stock: isAuto ? (localData !== undefined ? localData.stock : sheetStock) : sheetStock,
             type: "product",
             threshold: 5
           };
@@ -237,7 +241,7 @@ const ProductManagement = () => {
         try { window.dispatchEvent(new CustomEvent('pos:products:update', { detail: sheetProducts })); } catch { }
 
         if (!isAuto) {
-          alert(`✅ Sinkronisasi Berhasil!\n\n${sheetProducts.length} produk di HP diperbarui (nama & harga dari Sheet, stok tetap dari HP).`);
+          alert(`✅ Sinkronisasi Berhasil!\n\n${sheetProducts.length} produk di HP diperbarui dari Google Sheet (termasuk stok).`);
           setSyncMessage(`✓ Berhasil sync ${sheetProducts.length} produk`);
         }
         setTimeout(() => setSyncMessage(""), 5000);

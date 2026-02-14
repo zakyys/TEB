@@ -300,16 +300,26 @@ async function _flushStockToSheet(): Promise<void> {
 
     try {
         // Get the product GAS URL (keys match LS_KEYS in utils.ts)
-        const configStr = localStorage.getItem('pos_product_gas_url') || localStorage.getItem('pos_gas_url');
-        if (!configStr) {
+        // Values are stored via saveToLS which does JSON.stringify, so we need JSON.parse
+        let gasUrl = '';
+        try {
+            const raw = localStorage.getItem('pos_product_gas_url') || localStorage.getItem('pos_gas_url');
+            if (raw) gasUrl = JSON.parse(raw);
+        } catch {
+            // If parse fails, try raw value
+            gasUrl = localStorage.getItem('pos_product_gas_url') || localStorage.getItem('pos_gas_url') || '';
+        }
+
+        if (!gasUrl) {
             console.log('[StockSync] No GAS URL configured, skipping push');
             return;
         }
 
         console.log(`[StockSync] Pushing ${updates.length} stock updates to Sheet...`);
 
-        await fetch(configStr, {
+        await fetch(gasUrl, {
             method: "POST",
+            mode: "no-cors",
             headers: { "Content-Type": "text/plain;charset=utf-8" },
             body: JSON.stringify({
                 action: "batchUpdateStock",
