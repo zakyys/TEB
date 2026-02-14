@@ -2268,7 +2268,23 @@ const TransactionHistory: React.FC = () => {
                     <Minus className="h-4 w-4" />
                   </Button>
                   <div className="flex flex-col items-center">
-                    <span className="text-2xl font-bold text-amber-700 min-w-[40px] text-center">{returnQuantity}</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      className="text-2xl font-bold text-amber-700 min-w-[50px] w-[70px] text-center bg-transparent border-b-2 border-amber-300 focus:border-amber-500 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      value={returnQuantity}
+                      min={1}
+                      max={exchangeItemToReturn.item.quantity}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value) || 0;
+                        if (val >= 0 && val <= exchangeItemToReturn.item.quantity) {
+                          setReturnQuantity(val);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (returnQuantity < 1) setReturnQuantity(1);
+                      }}
+                    />
                     <span className="text-[10px] text-muted-foreground">dari {exchangeItemToReturn.item.quantity} pcs</span>
                   </div>
                   <Button
@@ -2691,7 +2707,23 @@ const TransactionHistory: React.FC = () => {
                   <Minus className="h-4 w-4" />
                 </Button>
                 <div className="flex flex-col items-center">
-                  <span className="text-2xl font-bold text-red-700 min-w-[40px] text-center">{returnQuantity}</span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    className="text-2xl font-bold text-red-700 min-w-[50px] w-[70px] text-center bg-transparent border-b-2 border-red-300 focus:border-red-500 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    value={returnQuantity}
+                    min={1}
+                    max={exchangeItemToReturn.item.quantity}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value) || 0;
+                      if (val >= 0 && val <= exchangeItemToReturn.item.quantity) {
+                        setReturnQuantity(val);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (returnQuantity < 1) setReturnQuantity(1);
+                    }}
+                  />
                   <span className="text-[10px] text-muted-foreground">dari {exchangeItemToReturn.item.quantity} pcs</span>
                 </div>
                 <Button
