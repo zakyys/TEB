@@ -1369,18 +1369,20 @@ const TransactionHistory: React.FC = () => {
                   .filter((t) => t.status === "completed")
                   .flatMap((transaction) =>
                     transaction.items
-                      // Filter items based on search query (loose match on name or SKU)
-                      .filter((item) => {
+                      // Fix: Map with ORIGINAL index first, then filter
+                      // This preserves the correct index for refund operations
+                      .map((item, originalIndex) => ({ item, originalIndex }))
+                      .filter(({ item }) => {
                         if (!searchQuery) return true;
                         const itemSku = item.sku || products.find((p: any) => p.name === item.name)?.sku || "";
                         return matchesLoose(item.name, searchQuery) || matchesLoose(itemSku, searchQuery) || matchesLoose(transaction.customer, searchQuery);
                       })
-                      .map((item, itemIndex) => {
+                      .map(({ item, originalIndex }) => {
                         const itemSku = item.sku || products.find((p: any) => p.name === item.name)?.sku || "";
                         return {
                           transaction,
                           item,
-                          itemIndex,
+                          itemIndex: originalIndex,
                           relevance: getSearchRelevance(itemSku, searchQuery) + (matchesLoose(item.name, searchQuery) ? 50 : 0) + (matchesLoose(transaction.customer, searchQuery) ? 80 : 0)
                         };
                       })
