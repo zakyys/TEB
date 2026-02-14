@@ -761,10 +761,13 @@ const TransactionHistory: React.FC = () => {
       });
     } else {
       // Full transaction refund (already checked at function start)
+      // Fix #12: Read products once, accumulate stock changes, write once
+      let currentProducts = getProducts().map(p => ({ ...p })); // shallow clone all
+
       selectedTransaction.items.forEach(item => {
         let sku = item.sku;
         if (!sku) {
-          const prod = products.find(p => p.name === item.name);
+          const prod = currentProducts.find(p => p.name === item.name);
           sku = prod?.sku || '-';
         }
 
@@ -784,16 +787,16 @@ const TransactionHistory: React.FC = () => {
           });
         }
 
-        // Update stock
-        const currentProducts = getProducts();
-        const updatedProducts = currentProducts.map(p => {
-          if (p.sku === sku && p.stock !== undefined) {
-            return { ...p, stock: p.stock + item.quantity };
-          }
-          return p;
-        });
-        setProducts(updatedProducts);
+        // Accumulate stock changes
+        const pIdx = currentProducts.findIndex(p => p.sku === sku && p.stock !== undefined);
+        if (pIdx !== -1) {
+          currentProducts[pIdx].stock += item.quantity;
+        }
       });
+
+      // Write all stock changes once
+      setProducts(currentProducts);
+      window.dispatchEvent(new CustomEvent('pos:products:update', { detail: currentProducts }));
 
       // Smart refund logic for full refund (already checked at function start)
       if (isSameDayRefund) {

@@ -104,7 +104,7 @@ export function addRefund(record: Omit<RefundRecord, 'id'>): RefundRecord {
     const refunds = getRefunds()
     const newRecord: RefundRecord = {
         ...record,
-        id: `RFD-${Date.now().toString().substring(6)}`
+        id: `RFD-${Date.now().toString().substring(6)}-${Math.random().toString(36).substring(2, 6)}`
     }
     refunds.push(newRecord)
     saveToLS(REFUND_KEY, refunds)

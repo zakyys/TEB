@@ -145,7 +145,7 @@ const ProfilePage = () => {
     }
 
     setStorageInfo(getStorageInfo());
-    setTxStats(getTransactionStats());
+    getTransactionStats().then(stats => setTxStats(stats));
 
     // Initial load
     loadDbStats();
@@ -1145,7 +1145,7 @@ const ProfilePage = () => {
                 } else {
                   alert(`✅ Berhasil menghapus ${result.archived.toLocaleString()} transaksi.\nTersisa ${result.remaining.toLocaleString()} transaksi.`);
                   setStorageInfo(getStorageInfo());
-                  setTxStats(getTransactionStats());
+                  getTransactionStats().then(stats => setTxStats(stats));
                   // Refresh IndexedDB stats
                   const txCount = await getTransactionsCount();
                   const allTx = await getAllTransactions();
@@ -1301,6 +1301,7 @@ const ProfilePage = () => {
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
                         action: "bulkUpdateProducts",
+                        secretKey: "zaky12345",
                         products: allProducts,
                       }),
                     });
@@ -1454,6 +1455,7 @@ _Pesan ini dikirim untuk memverifikasi koneksi Telegram._`;
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                       action: "resetSheets",
+                      secretKey: "zaky12345",
                       month: monthYear
                     })
                   });

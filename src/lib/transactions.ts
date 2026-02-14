@@ -36,7 +36,7 @@ export async function completeTransactionUtil(params: CompleteTxParams): Promise
   const change = isCash ? (amountPaid || 0) - total : 0
 
   const transaction = {
-    id: `TRX-${Date.now().toString().substring(6)}`,
+    id: `TRX-${Date.now().toString().substring(6)}-${Math.random().toString(36).substring(2, 6)}`,
     date: new Date().toISOString(),
     customer: customer.name,
     customerId: customer.id,

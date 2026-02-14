@@ -149,19 +149,31 @@ export const saveTransaction = async (data: any): Promise<void> => {
 };
 
 // Save multiple transactions (bulk)
+// Fix #6: Backup to localStorage before clearing IndexedDB to prevent data loss
 export const saveAllTransactions = async (transactions: any[]): Promise<void> => {
+    // Safety: backup to localStorage BEFORE clearing IndexedDB
+    // This ensures data survives if the write fails mid-way
+    try {
+        localStorage.setItem('pos_transactions_backup', JSON.stringify(transactions));
+    } catch (e) {
+        console.warn('[IndexedDB] localStorage backup failed (storage full?):', e);
+    }
+
     const db = await initDB();
     return new Promise((resolve, reject) => {
-        const transaction = db.transaction(STORE_TRANSACTIONS, 'readwrite');
-        const store = transaction.objectStore(STORE_TRANSACTIONS);
+        const txn = db.transaction(STORE_TRANSACTIONS, 'readwrite');
+        const store = txn.objectStore(STORE_TRANSACTIONS);
 
-        transaction.oncomplete = () => {
+        txn.oncomplete = () => {
+            // Success: remove backup since IndexedDB now has the data
+            try { localStorage.removeItem('pos_transactions_backup'); } catch { }
             resolve();
         };
 
-        transaction.onerror = () => {
-            console.error('Failed to save transactions:', transaction.error);
-            reject(transaction.error);
+        txn.onerror = () => {
+            console.error('Failed to save transactions:', txn.error);
+            console.warn('[IndexedDB] Data is preserved in localStorage backup key: pos_transactions_backup');
+            reject(txn.error);
         };
 
         // Clear existing and add all new

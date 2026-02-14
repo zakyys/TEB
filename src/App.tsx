@@ -13,7 +13,7 @@ import PurchaseInput from "@/components/purchase/PurchaseInput";
 import { Toaster } from "@/components/ui/toaster";
 import { PWAStatus } from "@/components/layout/PWAStatus";
 import { getStoreName } from "@/lib/utils";
-import { initProductCache } from "@/lib/productCache";
+import { initProductCache, flushProductCache, getProducts } from "@/lib/productCache";
 
 
 // SplashScreen component
@@ -75,6 +75,7 @@ function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [storeName, setStoreName] = useState(getStoreName());
 
+
   // Update document title when store name changes
   useEffect(() => {
     document.title = `${storeName} - Aplikasi Kasir`;
@@ -107,6 +108,32 @@ function App() {
 
     const timer = setTimeout(() => setShowSplash(false), 3000);
     return () => clearTimeout(timer);
+  }, []);
+
+  // Flush product cache before browser closes
+  // beforeunload does NOT wait for async operations, so we:
+  // 1. Fire the async IndexedDB write (best-effort)
+  // 2. Synchronously write to localStorage as a guaranteed fallback
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      // Best-effort async IndexedDB write (may not complete)
+      flushProductCache();
+
+      // Synchronous localStorage fallback — guaranteed to persist
+      try {
+        const currentProducts = getProducts();
+        if (currentProducts && currentProducts.length > 0) {
+          localStorage.setItem('PRODUCTS', JSON.stringify(currentProducts));
+        }
+      } catch (e) {
+        console.error('[App] Sync flush fallback failed:', e);
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
   }, []);
 
   if (showSplash) {

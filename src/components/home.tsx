@@ -2357,26 +2357,18 @@ const Dashboard = () => {
                         </div>
                       </div>
 
-                      {/* Actions Group (Horizontal) */}
-                      <div className="flex items-center gap-1 shrink-0">
+                      {/* Actions */}
+                      <div className="flex items-center shrink-0">
                         {!hutang.completed && (
                           <Button
                             variant="outline"
                             size="sm"
-                            className="h-6 w-6 p-0 bg-green-50 border-green-300 text-green-700 hover:bg-green-100"
+                            className="h-8 w-8 p-0 bg-green-100 border-green-400 text-green-700 hover:bg-green-200 shadow-sm"
                             onClick={() => setConfirmCompleteHutangId(hutang.id)}
                           >
-                            <Check className="h-2.5 w-2.5" />
+                            <Check className="h-4 w-4" />
                           </Button>
                         )}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 w-6 p-0 bg-red-50 border-red-200 text-red-500 hover:bg-red-50"
-                          onClick={() => setConfirmDeleteHutangId(hutang.id)}
-                        >
-                          <Trash2 className="h-2.5 w-2.5" />
-                        </Button>
                       </div>
                     </div>
 

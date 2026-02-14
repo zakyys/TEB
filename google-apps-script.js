@@ -66,6 +66,9 @@ function doPost(e) {
         var data = JSON.parse(e.postData.contents);
         var action = data.action;
 
+        // ═══ Kunci rahasia untuk aksi berbahaya ═══
+        var SECRET_KEY = "zaky12345";
+
         // Update single product
         if (action === "updateProduct") {
             return updateProduct(data.product);
@@ -73,6 +76,13 @@ function doPost(e) {
 
         // Bulk Upload Products (untuk Upload Semua Produk dari aplikasi)
         if (action === "bulkUpdateProducts") {
+            // Validasi kunci rahasia
+            if (data.secretKey !== SECRET_KEY) {
+                return ContentService.createTextOutput(JSON.stringify({
+                    success: false, error: "Akses ditolak: kunci salah"
+                })).setMimeType(ContentService.MimeType.JSON);
+            }
+
             var allProducts = data.products || [];
             if (allProducts.length === 0) {
                 return ContentService.createTextOutput(JSON.stringify({
@@ -126,6 +136,12 @@ function doPost(e) {
 
         // Reset/Clear Sheets
         if (action === "resetSheets") {
+            // Validasi kunci rahasia
+            if (data.secretKey !== SECRET_KEY) {
+                return ContentService.createTextOutput(JSON.stringify({
+                    success: false, error: "Akses ditolak: kunci salah"
+                })).setMimeType(ContentService.MimeType.JSON);
+            }
             return resetSheets(data);
         }
 
@@ -134,21 +150,28 @@ function doPost(e) {
             return saveMonthlyRecap(data);
         }
 
-        // SIMPAN BACKUP KE GOOGLE DRIVE (Run before saveSalesData to get the link)
-        if (data.fullBackup) {
-            data.backupInfo = saveBackupToDrive(data.fullBackup);
+        // Fix #1: Hanya proses saveSalesData jika action benar atau legacy (tanpa action)
+        if (action === "saveSalesData" || !action) {
+            // SIMPAN BACKUP KE GOOGLE DRIVE (Run before saveSalesData to get the link)
+            if (data.fullBackup) {
+                data.backupInfo = saveBackupToDrive(data.fullBackup);
+            }
+
+            var result = saveSalesData(data);
+
+            // KIRIM TELEGRAM (Server Side - Anti Blokir)
+            if (data.sendNotification) {
+                sendTelegramNotification(data);
+            }
+
+            return result;
         }
 
-        // Default: Kirim data penjualan
-        var result = saveSalesData(data);
-
-        // KIRIM TELEGRAM (Server Side - Anti Blokir)
-        // Kita kirim pesan teks dari sini agar pasti terkirim
-        if (data.sendNotification) {
-            sendTelegramNotification(data);
-        }
-
-        return result;
+        // Action tidak dikenal → kembalikan error
+        return ContentService.createTextOutput(JSON.stringify({
+            success: false,
+            error: "Action tidak dikenal: " + action
+        })).setMimeType(ContentService.MimeType.JSON);
 
     } catch (error) {
         return ContentService
@@ -1381,48 +1404,4 @@ function saveSalesData(data) {
     return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
 }
 
-// Update product
-function updateProduct(product) {
-    try {
-        var ss = SpreadsheetApp.getActiveSpreadsheet();
-        var sheet = ss.getSheetByName("Produk");
-
-        if (!sheet) {
-            sheet = ss.insertSheet("Produk");
-            sheet.appendRow(["KODE", "Nama", "Kategori", "Harga Jual", "Harga Beli", "Stok"]);
-        }
-
-        var data = sheet.getDataRange().getValues();
-        var found = false;
-
-        for (var i = 1; i < data.length; i++) {
-            if (data[i][0] === product.kode) {
-                sheet.getRange(i + 1, 1, 1, 6).setValues([[
-                    product.kode,
-                    product.nama,
-                    product.kategori,
-                    product.hargaJual,
-                    product.hargaBeli,
-                    product.stok
-                ]]);
-                found = true;
-                break;
-            }
-        }
-
-        if (!found) {
-            sheet.appendRow([
-                product.kode,
-                product.nama,
-                product.kategori,
-                product.hargaJual,
-                product.hargaBeli,
-                product.stok
-            ]);
-        }
-
-        return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
-    } catch (error) {
-        return ContentService.createTextOutput(JSON.stringify({ success: false, error: error.toString() })).setMimeType(ContentService.MimeType.JSON);
-    }
-}
+// Fix #2: Duplicate updateProduct removed (sudah ada di baris 806)

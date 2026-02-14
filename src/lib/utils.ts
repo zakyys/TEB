@@ -68,7 +68,8 @@ export function backupData(): string {
 }
 
 // Restore all POS data from a backup string
-export function restoreData(backupString: string): void {
+// Fix #11: Now saves transactions to IndexedDB (primary) + localStorage (fallback)
+export async function restoreData(backupString: string): Promise<void> {
   try {
     // Decode from Base64
     const decodedData = atob(backupString);
@@ -84,7 +85,14 @@ export function restoreData(backupString: string): void {
 
     // Restore products via product cache (persists to IndexedDB + memory)
     setProducts(parsedData.products);
+
+    // Save transactions to IndexedDB (primary) AND localStorage (fallback)
     saveToLS(LS_KEYS.TRANSACTIONS, parsedData.transactions);
+    try {
+      await saveAllTransactions(parsedData.transactions);
+    } catch (e) {
+      console.warn('[restoreData] IndexedDB save failed, localStorage fallback used:', e);
+    }
 
     if (parsedData.profile) {
       saveToLS(LS_KEYS.PROFILE, parsedData.profile);
@@ -484,12 +492,20 @@ export async function archiveOldTransactions(keepDays: number = 60): Promise<{ a
   // Helper to return stock for transactions
   const returnStockForTransactions = (transactionsToDelete: any[]) => {
     transactionsToDelete.forEach(t => {
+      // Skip hutang transactions — items were already taken by customer
+      if (t.paymentMethod === 'hutang') return;
+
       if (t.items && Array.isArray(t.items)) {
         t.items.forEach((item: any) => {
-          // Find product by SKU or name
-          const productIndex = products.findIndex(
-            p => p.sku === item.sku || p.name === item.name
-          );
+          // Prefer SKU matching (more precise), only fallback to name if SKU is unavailable
+          let productIndex = -1;
+          if (item.sku) {
+            productIndex = products.findIndex(p => p.sku === item.sku);
+          }
+          if (productIndex === -1 && item.name) {
+            productIndex = products.findIndex(p => p.name === item.name);
+          }
+
           if (productIndex !== -1 && products[productIndex].stock !== undefined) {
             products[productIndex].stock += item.quantity || 1;
           }
@@ -594,8 +610,16 @@ export async function archiveOldTransactions(keepDays: number = 60): Promise<{ a
 }
 
 // Get item count by period (counts total items, not transactions)
-export function getTransactionStats(): { total: number; thisMonth: number; lastMonth: number; older: number; txCount: number } {
-  const transactions = getFromLS<any[]>(LS_KEYS.TRANSACTIONS, []);
+export async function getTransactionStats(): Promise<{ total: number; thisMonth: number; lastMonth: number; older: number; txCount: number }> {
+  // Read from IndexedDB (primary source), fallback to localStorage
+  let transactions: any[];
+  try {
+    transactions = await getAllTransactions();
+  } catch (err) {
+    console.warn('getTransactionStats: IndexedDB failed, falling back to localStorage:', err);
+    transactions = getFromLS<any[]>(LS_KEYS.TRANSACTIONS, []);
+  }
+
   const now = new Date();
   const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
   const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
