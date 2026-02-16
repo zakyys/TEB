@@ -859,6 +859,24 @@ const ProductManagement = () => {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 max-h-[55vh] overflow-y-auto py-4">
+            {/* Kategori auto-detect */}
+            {newProduct.sku && (
+              <div className="mb-1">
+                <span className="text-sm font-bold text-blue-500 block">
+                  {(() => {
+                    const prefix = (newProduct.sku || '').substring(0, 2).toUpperCase();
+                    switch (prefix) {
+                      case 'BG': return 'BAUT GENERAL';
+                      case 'BA': return 'BAUT OTOMOTIF';
+                      case 'BK': return 'BAUT KAYU';
+                      case 'TL': return 'TOOL';
+                      case 'KG': return 'KILOGRAM';
+                      default: return 'Lainnya';
+                    }
+                  })()}
+                </span>
+              </div>
+            )}
             {/* KODE */}
             <div className="space-y-2">
               <Label htmlFor="sku" className="text-sm font-semibold text-gray-700">KODE PRODUK</Label>
@@ -883,31 +901,6 @@ const ProductManagement = () => {
                 }
                 className="text-lg"
               />
-            </div>
-            {/* Kategori */}
-            <div className="space-y-2">
-              <Label htmlFor="category" className="text-sm font-semibold text-gray-700">KATEGORI</Label>
-              <Select
-                value={newProduct.category}
-                onValueChange={(value) =>
-                  handleNewProductChange("category", value)
-                }
-              >
-                <SelectTrigger className="text-base">
-                  <SelectValue placeholder="Pilih kategori" />
-                </SelectTrigger>
-                <SelectContent>
-                  {categories
-                    .filter((c) => c !== "all")
-                    .map((category) => (
-                      <SelectItem key={category} value={category}>
-                        {category}
-                      </SelectItem>
-                    ))}
-                  <SelectItem value="Servis">Servis</SelectItem>
-                  <SelectItem value="Lainnya">Lainnya</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
             {/* Harga */}
             <div className="bg-gray-50 rounded-lg p-4 space-y-3">
@@ -995,8 +988,21 @@ const ProductManagement = () => {
           {selectedProduct && (
             <div className="space-y-4 max-h-[55vh] overflow-y-auto py-4">
               <div className="space-y-3 py-2">
-                <div className="grid grid-cols-2 gap-3">
-                  {/* KODE */}
+                {/* Kategori auto-detect + KODE */}
+                <div className="space-y-1">
+                  <span className="text-xs font-bold text-blue-500">
+                    {(() => {
+                      const prefix = (selectedProduct.sku || '').substring(0, 2).toUpperCase();
+                      switch (prefix) {
+                        case 'BG': return 'BAUT GENERAL';
+                        case 'BA': return 'BAUT OTOMOTIF';
+                        case 'BK': return 'BAUT KAYU';
+                        case 'TL': return 'TOOL';
+                        case 'KG': return 'KILOGRAM';
+                        default: return 'Lainnya';
+                      }
+                    })()}
+                  </span>
                   <div className="space-y-1">
                     <Label htmlFor="edit-sku" className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">KODE</Label>
                     <Input
@@ -1005,29 +1011,6 @@ const ProductManagement = () => {
                       onChange={(e) => handleEditProductChange("sku", e.target.value)}
                       className="font-mono text-sm h-9"
                     />
-                  </div>
-                  {/* Kategori */}
-                  <div className="space-y-1">
-                    <Label htmlFor="edit-category" className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">KATEGORI</Label>
-                    <Select
-                      value={selectedProduct.category}
-                      onValueChange={(value) => handleEditProductChange("category", value)}
-                    >
-                      <SelectTrigger className="text-sm h-9">
-                        <SelectValue placeholder="Kategori" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {categories
-                          .filter((c) => c !== "all")
-                          .map((category) => (
-                            <SelectItem key={category} value={category} className="text-sm">
-                              {category}
-                            </SelectItem>
-                          ))}
-                        <SelectItem value="Servis" className="text-sm">Servis</SelectItem>
-                        <SelectItem value="Lainnya" className="text-sm">Lainnya</SelectItem>
-                      </SelectContent>
-                    </Select>
                   </div>
                 </div>
 
@@ -1061,19 +1044,15 @@ const ProductManagement = () => {
                       />
                     </div>
                   </div>
-                  {/* Stok */}
+                  {/* Stok (read-only, hanya berubah via jual/refund/sync) */}
                   <div className="space-y-1">
                     <Label htmlFor="edit-stock" className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">STOK</Label>
                     <Input
                       id="edit-stock"
                       type="text"
-                      inputMode="numeric"
                       value={selectedProduct.stock === 0 ? "0" : selectedProduct.stock.toLocaleString("id-ID")}
-                      onChange={(e) => {
-                        const val = e.target.value.replace(/\D/g, "");
-                        handleEditProductChange("stock", parseInt(val) || 0);
-                      }}
-                      className="text-right font-medium h-9"
+                      disabled
+                      className="text-right font-medium h-9 bg-gray-100 text-gray-500 cursor-not-allowed"
                     />
                   </div>
                 </div>

@@ -1586,6 +1586,24 @@ const Dashboard = () => {
 
               </div>
 
+              {/* Stock Sync Status */}
+              <div className="border-t pt-2 mt-1">
+                <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-tight">
+                  <span className="text-muted-foreground">Sync Stok ke Sheet:</span>
+                  {(() => {
+                    const pendingRaw = localStorage.getItem('pos_pending_stock_sync');
+                    const pendingCount = pendingRaw ? Object.keys(JSON.parse(pendingRaw || '{}')).length : 0;
+                    if (pendingCount > 0) {
+                      return (
+                        <span className="text-orange-600 font-black animate-pulse">
+                          ⏸ {pendingCount} pending
+                        </span>
+                      );
+                    }
+                    return <span className="text-emerald-600">✓ Synced</span>;
+                  })()}
+                </div>
+              </div>
 
             </CardContent>
           </Card>
