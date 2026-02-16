@@ -259,37 +259,96 @@ export function findProductByName(name: string): any | undefined {
     return productCache.find(p => p.name === name);
 }
 
-// ============ Push Stock to Sheet (Bidirectional Sync) ============
+// ============ Push Stock to Sheet (Bidirectional Sync + Offline Resilience) ============
 
+const PENDING_STOCK_KEY = 'pos_pending_stock_sync';
 let pendingStockUpdates: Map<string, number> = new Map();
 let stockPushTimer: ReturnType<typeof setTimeout> | null = null;
+let stockSyncInitialized = false;
+
+/**
+ * Save pending updates to localStorage so they survive browser close
+ */
+function _persistPending(): void {
+    try {
+        if (pendingStockUpdates.size > 0) {
+            const data = Object.fromEntries(pendingStockUpdates);
+            localStorage.setItem(PENDING_STOCK_KEY, JSON.stringify(data));
+        } else {
+            localStorage.removeItem(PENDING_STOCK_KEY);
+        }
+    } catch { /* ignore quota errors */ }
+}
+
+/**
+ * Load pending updates from localStorage (from previous session)
+ */
+function _loadPending(): void {
+    try {
+        const raw = localStorage.getItem(PENDING_STOCK_KEY);
+        if (raw) {
+            const data = JSON.parse(raw);
+            for (const [kode, stok] of Object.entries(data)) {
+                if (!pendingStockUpdates.has(kode)) {
+                    pendingStockUpdates.set(kode, stok as number);
+                }
+            }
+            console.log(`[StockSync] Loaded ${Object.keys(data).length} pending updates from previous session`);
+        }
+    } catch { /* ignore parse errors */ }
+}
+
+/**
+ * Initialize stock sync: load pending from localStorage, listen for online event.
+ * Called once on app startup.
+ */
+export function initStockSync(): void {
+    if (stockSyncInitialized) return;
+    stockSyncInitialized = true;
+
+    _loadPending();
+
+    window.addEventListener('online', () => {
+        console.log('[StockSync] 📶 Device back online, flushing pending updates...');
+        _flushStockToSheet();
+    });
+
+    if (navigator.onLine && pendingStockUpdates.size > 0) {
+        console.log('[StockSync] Online with pending updates from previous session, flushing...');
+        setTimeout(() => _flushStockToSheet(), 3000);
+    }
+}
 
 /**
  * Queue stock changes to be pushed to Google Sheet.
- * Debounced (2s) to batch multiple changes (e.g., from a single transaction with many items).
- * 
- * @param updates - Array of {sku, stock} to push
+ * Debounced (2s). Persisted to localStorage for offline resilience.
  */
 export function pushStockToSheet(updates: Array<{ sku: string; stock: number }>): void {
-    // Accumulate updates (later values overwrite earlier for same SKU)
     for (const u of updates) {
         if (u.sku && u.sku !== '-') {
             pendingStockUpdates.set(u.sku, u.stock);
         }
     }
 
-    // Debounce: wait 2s for more updates before sending
-    if (stockPushTimer) {
-        clearTimeout(stockPushTimer);
+    // Persist immediately (survive crash/close)
+    _persistPending();
+
+    if (!navigator.onLine) {
+        console.log(`[StockSync] ⏸ Offline — ${pendingStockUpdates.size} updates queued (saved to localStorage)`);
+        return;
     }
 
-    stockPushTimer = setTimeout(() => {
-        _flushStockToSheet();
-    }, 2000);
+    if (stockPushTimer) clearTimeout(stockPushTimer);
+    stockPushTimer = setTimeout(() => _flushStockToSheet(), 2000);
 }
 
 async function _flushStockToSheet(): Promise<void> {
     if (pendingStockUpdates.size === 0) return;
+
+    if (!navigator.onLine) {
+        console.log('[StockSync] Still offline, keeping updates queued');
+        return;
+    }
 
     // Take snapshot and clear pending
     const updates = Array.from(pendingStockUpdates.entries()).map(([kode, stok]) => ({
@@ -297,44 +356,67 @@ async function _flushStockToSheet(): Promise<void> {
         stok
     }));
     pendingStockUpdates.clear();
+    _persistPending();
 
     try {
-        // Get the product GAS URL (keys match LS_KEYS in utils.ts)
-        // Values are stored via saveToLS which does JSON.stringify, so we need JSON.parse
         let gasUrl = '';
         try {
             const raw = localStorage.getItem('pos_product_gas_url') || localStorage.getItem('pos_gas_url');
             if (raw) gasUrl = JSON.parse(raw);
-        } catch {
-            // If parse fails, try raw value
-            gasUrl = localStorage.getItem('pos_product_gas_url') || localStorage.getItem('pos_gas_url') || '';
-        }
+        } catch { /* fallback */ }
 
         if (!gasUrl) {
             console.log('[StockSync] No GAS URL configured, skipping push');
             return;
         }
 
-        console.log(`[StockSync] Pushing ${updates.length} stock updates to Sheet...`);
+        console.log(`[StockSync] Pushing ${updates.length} stock updates...`);
+        const products = productCache || [];
+        let successCount = 0;
 
-        await fetch(gasUrl, {
-            method: "POST",
-            mode: "no-cors",
-            headers: { "Content-Type": "text/plain;charset=utf-8" },
-            body: JSON.stringify({
-                action: "batchUpdateStock",
-                updates: updates
-            })
-        });
+        for (const u of updates) {
+            const product = products.find((p: any) => p.sku === u.kode);
+            if (!product) {
+                console.log(`[StockSync] Product ${u.kode} not found in cache, skipping`);
+                continue;
+            }
 
-        console.log(`[StockSync] ✓ ${updates.length} stock updates pushed successfully`);
+            try {
+                await fetch(gasUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "text/plain;charset=utf-8" },
+                    body: JSON.stringify({
+                        action: "updateProductActive",
+                        product: {
+                            kode: product.sku,
+                            nama: product.name,
+                            hargaBeli: product.purchasePrice || 0,
+                            hargaJual: product.price || 0,
+                            stok: u.stok
+                        }
+                    })
+                });
+                successCount++;
+                console.log(`[StockSync] ✓ ${u.kode} → stok: ${u.stok}`);
+            } catch (err) {
+                console.error(`[StockSync] ✗ Failed ${u.kode}:`, err);
+                pendingStockUpdates.set(u.kode, u.stok);
+            }
+        }
+
+        // Persist any remaining failures
+        _persistPending();
+
+        if (successCount > 0) {
+            console.log(`[StockSync] ✓ ${successCount}/${updates.length} pushed successfully`);
+        }
     } catch (err) {
-        console.error('[StockSync] Failed to push stock to Sheet:', err);
-        // Re-queue failed updates so they can be retried
+        console.error('[StockSync] Failed:', err);
         for (const u of updates) {
             if (!pendingStockUpdates.has(u.kode)) {
                 pendingStockUpdates.set(u.kode, u.stok);
             }
         }
+        _persistPending();
     }
 }

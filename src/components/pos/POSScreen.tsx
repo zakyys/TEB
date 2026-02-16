@@ -385,13 +385,15 @@ const POSScreen = () => {
     setProducts(updatedProducts)
 
     // ★ Push stock changes to Google Sheet (bidirectional sync)
+    console.log('[StockSync] Cart items:', cart.map(i => ({ sku: i.sku, type: i.type, qty: i.quantity })));
     const stockUpdates = cart
-      .filter(i => i.type === 'product' && i.sku && i.sku !== '-')
+      .filter(i => i.sku && i.sku !== '-')
       .map(cartItem => {
         const prod = updatedProducts.find((p: any) => p.sku === cartItem.sku);
         return prod ? { sku: prod.sku, stock: prod.stock ?? 0 } : null;
       })
       .filter(Boolean) as Array<{ sku: string; stock: number }>;
+    console.log('[StockSync] Stock updates to push:', stockUpdates);
     if (stockUpdates.length > 0) {
       pushStockToSheet(stockUpdates);
     }

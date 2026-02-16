@@ -13,7 +13,7 @@ import PurchaseInput from "@/components/purchase/PurchaseInput";
 import { Toaster } from "@/components/ui/toaster";
 import { PWAStatus } from "@/components/layout/PWAStatus";
 import { getStoreName } from "@/lib/utils";
-import { initProductCache, flushProductCache, getProducts } from "@/lib/productCache";
+import { initProductCache, flushProductCache, getProducts, initStockSync } from "@/lib/productCache";
 
 
 // SplashScreen component
@@ -102,6 +102,8 @@ function App() {
     // By the time splash ends, products are loaded in memory
     initProductCache().then(() => {
       console.log('[App] Product cache initialized');
+      // Initialize stock sync after products are loaded
+      initStockSync();
     }).catch(err => {
       console.error('[App] Product cache init failed:', err);
     });

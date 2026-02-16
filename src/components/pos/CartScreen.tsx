@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency } from "@/lib/utils";
-import { getProducts, setProducts as setCachedProducts } from "@/lib/productCache";
+import { getProducts, setProducts as setCachedProducts, pushStockToSheet } from "@/lib/productCache";
 import { Button } from "@/components/ui/button";
 import { Minus, Plus, ShoppingCart, Trash2, CreditCard } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -160,6 +160,16 @@ const CartScreen = () => {
     // Perbarui produk di UI (CartScreen tidak pegang state products, jadi cukup persist)
     setCachedProducts(updatedProducts);
 
+    // ★ Push stock changes to Google Sheet (bidirectional sync)
+    const stockUpdates = cart
+      .filter(i => i.sku && i.sku !== '-')
+      .map(cartItem => {
+        const prod = updatedProducts.find((p: any) => p.sku === cartItem.sku);
+        return prod ? { sku: prod.sku, stock: prod.stock ?? 0 } : null;
+      })
+      .filter(Boolean) as Array<{ sku: string; stock: number }>;
+    if (stockUpdates.length > 0) pushStockToSheet(stockUpdates);
+
     // Simpan total untuk popup
     setLastTransactionTotal(total);
 
@@ -245,6 +255,16 @@ const CartScreen = () => {
 
     // Perbarui produk di UI
     setCachedProducts(updatedProducts);
+
+    // ★ Push stock changes to Google Sheet (bidirectional sync)
+    const stockUpdatesHutang = cart
+      .filter(i => i.sku && i.sku !== '-')
+      .map(cartItem => {
+        const prod = updatedProducts.find((p: any) => p.sku === cartItem.sku);
+        return prod ? { sku: prod.sku, stock: prod.stock ?? 0 } : null;
+      })
+      .filter(Boolean) as Array<{ sku: string; stock: number }>;
+    if (stockUpdatesHutang.length > 0) pushStockToSheet(stockUpdatesHutang);
 
     // Simpan total untuk popup
     setLastTransactionTotal(total);
