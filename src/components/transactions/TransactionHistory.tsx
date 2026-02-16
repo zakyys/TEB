@@ -513,6 +513,8 @@ const TransactionHistory: React.FC = () => {
     if (productIndex !== -1 && products[productIndex].stock !== undefined) {
       products[productIndex].stock += itemToDelete.quantity || 1;
       setProducts(products);
+      // Push stock to Sheet
+      pushStockToSheet([{ sku: products[productIndex].sku, stock: products[productIndex].stock }]);
     }
 
     const updatedTransactions = transactions.map(t => {
@@ -560,6 +562,8 @@ const TransactionHistory: React.FC = () => {
       products[productIndex].stock = (products[productIndex].stock || 0) + qtyDiff;
       setProducts(products);
       window.dispatchEvent(new CustomEvent('pos:products:update', { detail: products }));
+      // Push stock to Sheet
+      pushStockToSheet([{ sku: products[productIndex].sku, stock: products[productIndex].stock }]);
     }
 
     // Update transaction
