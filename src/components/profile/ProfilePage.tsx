@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -95,6 +96,8 @@ const ProfilePage = () => {
   const [tempProductGasUrl, setTempProductGasUrl] = useState(config.productGasUrl);
   const [tempBotToken, setTempBotToken] = useState(config.telegramBotToken);
   const [tempChatId, setTempChatId] = useState(config.telegramChatId);
+  const [tempAutoSendEnabled, setTempAutoSendEnabled] = useState(config.autoSendEnabled || false);
+  const [tempAutoSendTimes, setTempAutoSendTimes] = useState(config.autoSendTimes || "");
   const [uploadingProducts, setUploadingProducts] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
   const cancelUploadRef = useRef(false);
@@ -410,51 +413,90 @@ const ProfilePage = () => {
     todayDataInputRef.current?.click();
   };
 
-  // Send ALL historical data to Google Sheets (for new store setup)
+  // Send THIS MONTH's data to Google Sheets (write ulang dari awal + recap)
   const sendAllHistoricalData = async () => {
     const currentConfig = getConfig();
+    const now = new Date();
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+    const monthYear = monthNames[now.getMonth()] + " " + now.getFullYear();
+
+    // Calculate start of current month (YYYY-MM-01)
+    const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const todayStr = now.toISOString().split('T')[0];
 
     // Get all transactions from IndexedDB
     const allTransactions = await getAllTransactions();
     const completedTransactions = allTransactions.filter(t =>
-      t.status !== "cancelled" && t.status !== "refunded"
+      t.status !== "cancelled" && t.status !== "refunded" &&
+      t.date.split('T')[0] >= startOfMonth && t.date.split('T')[0] <= todayStr
     );
 
-    // Get all visitors, lost, exchanges, notes from localStorage
-    const allVisitors = getFromLS<VisitorLog[]>(LS_KEYS.VISITORS_LOG, []);
-    const allLost = getFromLS<VisitorLostLog[]>(LS_KEYS.VISITOR_LOST_LOG, []);
-    const allExchanges = getFromLS<any[]>('bengkel_exchanges', []);
-    const allRefunds = getFromLS<any[]>('bengkel_refunds', []); // NEW: Collect Refunds
-    const allNotes = getFromLS<any[]>('bengkel_notes', []);
+    // Get all data from localStorage, filtered to this month
+    const allVisitors = getFromLS<VisitorLog[]>(LS_KEYS.VISITORS_LOG, []).filter(v => v.date >= startOfMonth && v.date <= todayStr);
+    const allLost = getFromLS<VisitorLostLog[]>(LS_KEYS.VISITOR_LOST_LOG, []).filter(l => l.date >= startOfMonth && l.date <= todayStr);
+    const allExchanges = getFromLS<any[]>('bengkel_exchanges', []).filter(e => {
+      const d = e.date?.split('T')[0];
+      return d && d >= startOfMonth && d <= todayStr;
+    });
+    const allRefunds = getFromLS<any[]>('bengkel_refunds', []).filter(r => {
+      const d = r.date?.split('T')[0];
+      return d && d >= startOfMonth && d <= todayStr;
+    });
+    const allNotes = getFromLS<any[]>('bengkel_notes', []).filter(n => {
+      const d = n.date?.split('T')[0];
+      // Include notes created this month OR hutang that is still pending
+      return (d && d >= startOfMonth && d <= todayStr) || (n.type === 'hutang' && !n.completed);
+    });
 
     if (completedTransactions.length === 0 && allVisitors.length === 0) {
-      alert("Tidak ada data untuk dikirim");
+      alert("Tidak ada data bulan ini untuk dikirim");
       return;
     }
+
+    // ═══════════════════════════════════════════
+    // Step 1: Reset Sheet bulan ini dulu
+    // ═══════════════════════════════════════════
+    setSendingHistorical(true);
+    setHistoricalProgress("🔄 Reset sheet bulan ini...");
+
+    try {
+      await fetch(currentConfig.gasUrl, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "resetSheets",
+          secretKey: "zaky12345",
+          month: monthYear
+        })
+      });
+      console.log("[Historical] Sheet reset for", monthYear);
+    } catch (e) {
+      console.error("[Historical] Failed to reset sheet:", e);
+    }
+
+    // Small delay after reset
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // ═══════════════════════════════════════════
+    // Step 2: Group data by date & send per hari
+    // ═══════════════════════════════════════════
 
     // Group transactions by date
     const transactionsByDate: Record<string, typeof allTransactions> = {};
     completedTransactions.forEach(t => {
       const dateKey = t.date.split('T')[0];
-      if (!transactionsByDate[dateKey]) {
-        transactionsByDate[dateKey] = [];
-      }
+      if (!transactionsByDate[dateKey]) transactionsByDate[dateKey] = [];
       transactionsByDate[dateKey].push(t);
     });
 
-    // Group visitors by date (using timestamp to determine before/after 12)
+    // Group visitors by date
     const visitorsByDate: Record<string, { before12: number; after12: number }> = {};
     allVisitors.forEach(v => {
-      if (!visitorsByDate[v.date]) {
-        visitorsByDate[v.date] = { before12: 0, after12: 0 };
-      }
-      // Use timestamp to determine if before or after 12:00
+      if (!visitorsByDate[v.date]) visitorsByDate[v.date] = { before12: 0, after12: 0 };
       const hour = new Date(v.ts).getHours();
-      if (hour < 12) {
-        visitorsByDate[v.date].before12++;
-      } else {
-        visitorsByDate[v.date].after12++;
-      }
+      if (hour < 12) visitorsByDate[v.date].before12++;
+      else visitorsByDate[v.date].after12++;
     });
 
     // Group lost by date
@@ -464,7 +506,7 @@ const ProfilePage = () => {
       lostByDate[l.date].push(l.description);
     });
 
-    // Collect all unique dates (from transactions, visitors, AND lost)
+    // Collect all unique dates this month
     const allDates = new Set([
       ...Object.keys(transactionsByDate),
       ...Object.keys(visitorsByDate),
@@ -472,15 +514,14 @@ const ProfilePage = () => {
     ]);
     const dates = Array.from(allDates).sort();
 
-    setSendingHistorical(true);
-    setHistoricalProgress(`Memulai pengiriman ${dates.length} hari...`);
+    setHistoricalProgress(`Mengirim ${dates.length} hari data bulan ini...`);
 
     let successCount = 0;
     let failCount = 0;
 
     // Aggregate monthly data for recap
-    const monthlyItems: Record<string, { sku: string; name: string; quantity: number; total: number }> = {};
-    const dailyVisitorsList: { date: string; before12: number; after12: number; lost: number }[] = [];
+    const monthlyItems: Record<string, { sku: string; name: string; quantity: number; total: number; transactionCount: number }> = {};
+    const dailyVisitorsList: { date: string; before12: number; after12: number; lost: number; lostList: string[] }[] = [];
     const allLostListForRecap: { date: string; description: string }[] = [];
 
     for (let i = 0; i < dates.length; i++) {
@@ -492,8 +533,13 @@ const ProfilePage = () => {
       setHistoricalProgress(`Mengirim ${i + 1}/${dates.length}: ${dateStr}`);
 
       // Aggregate items for this day
-      const dayItems: Record<string, { sku: string; name: string; quantity: number; price: number; total: number }> = {};
+      const dayItems: Record<string, { sku: string; name: string; quantity: number; price: number; total: number; isHutang: boolean }> = {};
       dayTransactions.forEach(t => {
+        // Cek hutang status
+        const isHutangTx = t.paymentMethod === 'hutang' || (t as any).isHutang === true;
+        const associatedNote = allNotes.find((n: any) => n.transactionId === t.id);
+        const isStillHutang = isHutangTx && (!associatedNote || !associatedNote.completed);
+
         t.items.forEach(item => {
           const key = item.sku || item.name;
           if (dayItems[key]) {
@@ -505,11 +551,14 @@ const ProfilePage = () => {
               name: item.name,
               quantity: item.quantity,
               price: item.price,
-              total: item.quantity * item.price
+              total: item.quantity * item.price,
+              isHutang: isStillHutang
             };
           }
 
-          // Also aggregate for monthly
+          // Also aggregate for monthly recap
+          const itemsInTx = new Set<string>();
+          itemsInTx.add(key);
           if (monthlyItems[key]) {
             monthlyItems[key].quantity += item.quantity;
             monthlyItems[key].total += item.quantity * item.price;
@@ -518,53 +567,55 @@ const ProfilePage = () => {
               sku: item.sku || '-',
               name: item.name,
               quantity: item.quantity,
-              total: item.quantity * item.price
+              total: item.quantity * item.price,
+              transactionCount: 0
             };
           }
+        });
+
+        // Count unique transactions per item for recap
+        const itemsInThisTx = new Set<string>();
+        t.items.forEach(item => itemsInThisTx.add(item.sku || item.name));
+        itemsInThisTx.forEach(key => {
+          if (monthlyItems[key]) monthlyItems[key].transactionCount += 1;
         });
       });
 
       const itemsList = Object.values(dayItems).map(item => ({
         kode: item.sku,
-        nama: item.name,
         quantity: item.quantity,
         price: item.price,
-        total: item.total
+        total: item.total,
+        totalFormatted: item.total.toLocaleString('id-ID'),
+        isHutang: item.isHutang
       }));
 
       // Format date for display
       const displayDate = new Date(dateStr).toLocaleDateString('id-ID', {
         day: 'numeric',
-        month: 'long',
+        month: 'short',
         year: 'numeric'
-      });
+      }).replace(/\./g, '');
 
       // Collect for recap
       dailyVisitorsList.push({
         date: displayDate,
         before12: dayVisitors.before12,
         after12: dayVisitors.after12,
-        lost: dayLost.length
+        lost: dayLost.length,
+        lostList: dayLost
       });
-      // Add lost items with date for recap
       dayLost.forEach(desc => {
         allLostListForRecap.push({ date: displayDate, description: desc });
       });
 
       // Filter exchanges for this day
-      const dayExchanges = allExchanges.filter(e => {
-        const exchangeDate = e.date.split('T')[0];
-        return exchangeDate === dateStr;
-      }).map(e => {
-        // Fallback: if originalPurchaseDate missing, find from transaction
+      const dayExchanges = allExchanges.filter(e => e.date.split('T')[0] === dateStr).map(e => {
         let purchaseDate = e.originalPurchaseDate;
         if (!purchaseDate && e.originalTransactionId) {
           const originalTrx = allTransactions.find(t => t.id === e.originalTransactionId);
-          if (originalTrx) {
-            purchaseDate = originalTrx.date;
-          }
+          if (originalTrx) purchaseDate = originalTrx.date;
         }
-
         return {
           originalItem: e.originalItem,
           newItem: e.newItem,
@@ -577,43 +628,71 @@ const ProfilePage = () => {
         };
       });
 
-      // Filter notes for this day:
-      // - Show notes that were CREATED on or before this day
-      // - AND either: not completed, OR completed AFTER this day
-      // This means pending notes keep appearing until marked complete
+      // Filter refunds for this day
+      const dayRefunds = allRefunds.filter(r => r.date.split('T')[0] === dateStr).map(r => {
+        let pDate = r.originalPurchaseDate || r.purchaseDate;
+        if (!pDate && r.transactionId) {
+          const trx = allTransactions.find(t => t.id === r.transactionId);
+          if (trx) pDate = trx.date;
+        }
+        let displayPDate = '-';
+        if (pDate) {
+          const isSameDay = r.date.split('T')[0] === pDate.split('T')[0];
+          displayPDate = isSameDay ? "Di hari yg sama" : new Date(pDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '');
+        }
+        return {
+          date: displayDate,
+          kode: r.item?.sku || r.kode || '-',
+          nama: r.item?.name || r.nama || '-',
+          quantity: r.item?.quantity || r.quantity || 1,
+          price: r.item?.price || r.price || 0,
+          total: r.total || (r.item?.price * (r.item?.quantity || 1)) || 0,
+          purchaseDate: displayPDate,
+          jenis: 'REFUND'
+        };
+      });
+
+      // Filter notes for this day
       const dayNotes = allNotes.filter(n => {
         const noteCreatedDate = n.date.split('T')[0];
         const completedDate = n.completedAt ? n.completedAt.split('T')[0] : null;
-
-        // Note must be created on or before this day
         if (noteCreatedDate > dateStr) return false;
-
-        // If note is not completed, show it
         if (!n.completed) return true;
-
-        // If note is completed, only show if completed ON or AFTER this day
         if (completedDate && completedDate >= dateStr) return true;
-
-        // Note was completed before this day, don't show
         return false;
       }).map(n => {
         const completedDate = n.completedAt ? n.completedAt.split('T')[0] : null;
-        // Only show as SELESAI if completedDate equals this day
         const isCompletedOnThisDay = completedDate === dateStr;
         return {
-          date: new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
+          date: new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
           type: n.type,
           customerName: n.customerName || '-',
           content: n.content,
           amount: n.amount || 0,
-          completed: isCompletedOnThisDay
+          completed: isCompletedOnThisDay,
+          completedAt: n.completedAt && isCompletedOnThisDay ? 'HARI INI' : (n.completedAt ? new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : null)
         };
       });
+
+      // Build hutang array separately
+      const dayHutang = allNotes.filter(n => {
+        if (n.type !== 'hutang') return false;
+        const creationDate = n.date.split('T')[0];
+        const completionDate = n.completedAt ? n.completedAt.split('T')[0] : null;
+        return (creationDate === dateStr) || (completionDate === dateStr) || (!n.completed);
+      }).map(n => ({
+        date: new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
+        customerName: n.customerName || '-',
+        content: n.content,
+        amount: n.amount || 0,
+        completed: n.completed || false,
+        completedAt: n.completedAt ? (n.date.split('T')[0] === n.completedAt.split('T')[0] ? 'HARI INI' : new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '')) : null
+      }));
 
       const dailyPayload = {
         date: displayDate,
         items: itemsList,
-        refunds: [],
+        refunds: dayRefunds,
         exchanges: dayExchanges,
         visitors: {
           before12: dayVisitors.before12,
@@ -623,6 +702,7 @@ const ProfilePage = () => {
           lostList: dayLost
         },
         notes: dayNotes,
+        hutang: dayHutang,
         sendNotification: false
       };
 
@@ -644,42 +724,42 @@ const ProfilePage = () => {
       await new Promise(resolve => setTimeout(resolve, 300));
     }
 
-    // Send Monthly Recap
+    // ═══════════════════════════════════════════
+    // Step 3: Send Monthly Recap
+    // ═══════════════════════════════════════════
     setHistoricalProgress("Mengirim rekap bulanan...");
-    const now = new Date();
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
-    const monthYear = monthNames[now.getMonth()] + " " + now.getFullYear();
 
     // Sort monthly items by quantity
     const sortedMonthlyItems = Object.values(monthlyItems)
-      .sort((a, b) => b.quantity - a.quantity)
+      .sort((a, b) => {
+        if (b.quantity !== a.quantity) return b.quantity - a.quantity;
+        return b.total - a.total;
+      })
       .map((item, idx) => ({
         rank: idx + 1,
         kode: item.sku,
         nama: item.name,
         quantity: item.quantity,
-        total: item.total
+        transactionCount: item.transactionCount,
+        totalSales: item.total
       }));
 
-    // Format exchanges for recap (Legacy - mapping to monthlyRefunds format)
+    // Format exchanges for recap
     const monthlyExchangesFormatted = allExchanges.map(e => {
       let purchaseDate = e.originalPurchaseDate;
       if (!purchaseDate && e.originalTransactionId) {
         const originalTrx = allTransactions.find(t => t.id === e.originalTransactionId);
         if (originalTrx) purchaseDate = originalTrx.date;
       }
-
       const exchangeDateStr = e.date ? new Date(e.date).toISOString().split('T')[0] : '';
       const purchaseDateStr = purchaseDate ? new Date(purchaseDate).toISOString().split('T')[0] : '';
-
       let tglBeli = '-';
       if (purchaseDate) {
-        tglBeli = (purchaseDateStr === exchangeDateStr) ? 'Di hari yg sama' : new Date(purchaseDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+        tglBeli = (purchaseDateStr === exchangeDateStr) ? 'Di hari yg sama' : new Date(purchaseDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '');
       }
-
       return {
         date: new Date(e.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
-        tglBeli: tglBeli,
+        tglBeli,
         kode: e.originalItem?.sku || '-',
         nama: e.originalItem?.name || '-',
         quantity: e.originalItem?.quantity || 1,
@@ -694,15 +774,13 @@ const ProfilePage = () => {
       let pDate = r.originalPurchaseDate || r.purchaseDate;
       const refundDateStr = r.date ? new Date(r.date).toISOString().split('T')[0] : '';
       const pDateStr = pDate ? new Date(pDate).toISOString().split('T')[0] : '';
-
       let tglBeli = '-';
       if (pDate) {
-        tglBeli = (pDateStr === refundDateStr) ? 'Di hari yg sama' : new Date(pDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+        tglBeli = (pDateStr === refundDateStr) ? 'Di hari yg sama' : new Date(pDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '');
       }
-
       return {
         date: new Date(r.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
-        tglBeli: tglBeli,
+        tglBeli,
         kode: r.item?.sku || r.kode || "-",
         nama: r.item?.name || r.nama || "-",
         quantity: r.item?.quantity || r.quantity || 1,
@@ -715,15 +793,42 @@ const ProfilePage = () => {
     const combinedMonthlyRefunds = [...monthlyRefundsFormatted, ...monthlyExchangesFormatted];
 
     // Format notes for recap
-    const monthlyNotes = allNotes.map(n => ({
-      date: new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
+    const monthlyNotes = allNotes.filter(n => {
+      const noteDate = n.date.split('T')[0];
+      if (n.type === 'hutang' && !n.completed) return true;
+      return noteDate >= startOfMonth;
+    }).map(n => ({
+      date: new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
       type: n.type,
       customerName: n.customerName || '-',
       content: n.content,
       amount: n.amount || 0,
       completed: n.completed || false,
-      completedAt: n.completedAt ? new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : '-'
+      completedAt: n.completedAt ? (n.date.split('T')[0] === n.completedAt.split('T')[0] ? 'HARI YG SAMA' : new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '')) : '-'
     }));
+
+    // Hitung penjualan per kategori (berdasarkan prefix SKU)
+    const historicalCategorySalesMap: Record<string, number> = {};
+    completedTransactions.forEach(t => {
+      t.items.forEach((item: any) => {
+        const sku = (item.sku || '').toUpperCase();
+        const prefix = sku.substring(0, 2);
+        let category: string;
+        switch (prefix) {
+          case 'BA': category = 'BA'; break;
+          case 'BG': category = 'BG'; break;
+          case 'BK': category = 'BK'; break;
+          case 'TL': category = 'TL'; break;
+          case 'KG': category = 'KG'; break;
+          default: category = 'Lainnya'; break;
+        }
+        const itemTotal = item.quantity * item.price;
+        historicalCategorySalesMap[category] = (historicalCategorySalesMap[category] || 0) + itemTotal;
+      });
+    });
+    const historicalCategorySales = Object.entries(historicalCategorySalesMap)
+      .map(([category, total]) => ({ category, total }))
+      .sort((a, b) => b.total - a.total);
 
     try {
       await fetch(currentConfig.gasUrl, {
@@ -734,21 +839,24 @@ const ProfilePage = () => {
           action: "monthlyRecap",
           month: monthYear,
           items: sortedMonthlyItems,
+          categorySales: historicalCategorySales, // NEW: Penjualan per kategori
           dailyVisitors: dailyVisitorsList,
           allLostList: allLostListForRecap,
           monthlyRefunds: combinedMonthlyRefunds,
           monthlyExchanges: monthlyExchangesFormatted,
-          monthlyNotes: monthlyNotes
+          monthlyNotes: monthlyNotes,
+          telegramBotToken: currentConfig.telegramBotToken,
+          telegramChatId: currentConfig.telegramChatId,
         })
       });
-      console.log("[Historical] Sent monthly recap");
+      console.log("[Historical] Sent monthly recap for", monthYear);
     } catch (e) {
       console.error("[Historical] Failed to send monthly recap:", e);
     }
 
     setSendingHistorical(false);
     setHistoricalProgress("");
-    alert(`Data historis berhasil dikirim!\n\n📅 ${dates.length} hari\n✅ Sukses: ${successCount}${failCount > 0 ? `\n❌ Gagal: ${failCount}` : ''}\n\n📊 Recap bulanan juga dikirim`);
+    alert(`✅ Data bulan ini berhasil dikirim ulang!\n\n📅 Bulan: ${monthYear}\n📊 ${dates.length} hari data dikirim\n✅ Sukses: ${successCount}${failCount > 0 ? `\n❌ Gagal: ${failCount}` : ''}\n\n🏆 Recap bulanan juga dikirim`);
   };
 
   return (
@@ -955,6 +1063,8 @@ const ProfilePage = () => {
                   setTempProductGasUrl(c.productGasUrl);
                   setTempBotToken(c.telegramBotToken);
                   setTempChatId(c.telegramChatId);
+                  setTempAutoSendEnabled(c.autoSendEnabled);
+                  setTempAutoSendTimes(c.autoSendTimes);
                   setSettingsOpen(true);
                 }}
                 className="w-full bg-blue-600 hover:bg-blue-700 mt-2"
@@ -1408,6 +1518,43 @@ _Pesan ini dikirim untuk memverifikasi koneksi Telegram._`;
               </div>
               <p className="text-[10px] text-muted-foreground">ID grup/channel dimulai dengan -100...</p>
             </div>
+
+            <div className="space-y-4 pt-2 border-t mt-4">
+              <label className="text-sm font-bold flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                Auto Kirim Penjualan (Otomatis)
+              </label>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium">Aktifkan Auto Kirim</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    Aplikasi akan otomatis mengirim data penjualan pada jam yang ditentukan
+                  </p>
+                </div>
+                <Switch
+                  checked={tempAutoSendEnabled}
+                  onCheckedChange={setTempAutoSendEnabled}
+                />
+              </div>
+
+              {tempAutoSendEnabled && (
+                <div className="space-y-2">
+                  <Label className="text-xs">Waktu Kirim (Pisahkan dengan koma)</Label>
+                  <Input
+                    value={tempAutoSendTimes}
+                    onChange={(e) => setTempAutoSendTimes(e.target.value)}
+                    placeholder="Contoh: 15:00, 21:00"
+                    className="text-xs font-mono"
+                    autoUppercase={false}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Format 24 jam. Contoh: "09:00, 15:30, 21:00". <br />
+                    <strong className="text-red-500">Penting:</strong> Aplikasi harus dalam keadaan terbuka agar auto kirim berjalan.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Action Buttons Section */}
@@ -1417,7 +1564,10 @@ _Pesan ini dikirim untuk memverifikasi koneksi Telegram._`;
               className="w-full border-amber-300 text-amber-700 hover:bg-amber-50"
               disabled={sendingHistorical}
               onClick={() => {
-                if (confirm("Kirim semua data historis ke Google Sheets?\n\nIni akan mengirim data per hari secara berurutan.")) {
+                const now = new Date();
+                const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+                const monthYear = monthNames[now.getMonth()] + " " + now.getFullYear();
+                if (confirm(`Kirim ulang seluruh data bulan ${monthYear} ke Google Sheets?\n\n⚠️ Sheet Harian & Recap bulan ini akan di-RESET lalu ditulis ulang dari awal.\n\nLanjutkan?`)) {
                   sendAllHistoricalData();
                 }
               }}
@@ -1430,7 +1580,7 @@ _Pesan ini dikirim untuk memverifikasi koneksi Telegram._`;
               ) : (
                 <>
                   <Calendar className="h-4 w-4 mr-2" />
-                  Kirim Data Historis
+                  Kirim Ulang Data Bulan Ini
                 </>
               )}
             </Button>
@@ -1480,11 +1630,15 @@ _Pesan ini dikirim untuk memverifikasi koneksi Telegram._`;
                   localStorage.removeItem(LS_KEYS.PRODUCT_GAS_URL);
                   localStorage.removeItem(LS_KEYS.TELEGRAM_BOT_TOKEN);
                   localStorage.removeItem(LS_KEYS.TELEGRAM_CHAT_ID);
+                  localStorage.removeItem(LS_KEYS.AUTO_SEND_SALES_ENABLED);
+                  localStorage.removeItem(LS_KEYS.AUTO_SEND_SALES_TIMES);
                   const def = getConfig();
                   setTempGasUrl(def.gasUrl);
                   setTempProductGasUrl(def.productGasUrl);
                   setTempBotToken(def.telegramBotToken);
                   setTempChatId(def.telegramChatId);
+                  setTempAutoSendEnabled(def.autoSendEnabled);
+                  setTempAutoSendTimes(def.autoSendTimes);
                   setConfig(def);
                   alert("Pengaturan direset ke default.");
                 }
@@ -1501,7 +1655,15 @@ _Pesan ini dikirim untuk memverifikasi koneksi Telegram._`;
                   saveToLS(LS_KEYS.PRODUCT_GAS_URL, tempProductGasUrl.trim());
                   saveToLS(LS_KEYS.TELEGRAM_BOT_TOKEN, tempBotToken.trim());
                   saveToLS(LS_KEYS.TELEGRAM_CHAT_ID, tempChatId.trim());
-                  setConfig(getConfig());
+                  saveToLS(LS_KEYS.AUTO_SEND_SALES_ENABLED, tempAutoSendEnabled);
+                  saveToLS(LS_KEYS.AUTO_SEND_SALES_TIMES, tempAutoSendTimes.trim());
+
+                  const updatedConfig = getConfig();
+                  setConfig(updatedConfig);
+
+                  // Trigger event to notify App layout
+                  window.dispatchEvent(new CustomEvent('configUpdated'));
+
                   setSettingsOpen(false);
                   alert("Pengaturan berhasil disimpan!");
                 }}

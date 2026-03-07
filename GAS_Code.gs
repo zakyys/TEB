@@ -75,6 +75,10 @@ function doPost(e) {
       return updateProduct(data.product);
     }
 
+    if (action === "updateProductActive") {
+      return updateProduct(data.product);
+    }
+
     if (action === "resetSheets") {
       return resetSheets(data);
     }
@@ -240,6 +244,7 @@ function resetSheets(data) {
   saveMonthlyRecap({
     month: month,
     items: [],
+    categorySales: [],
     dailyVisitors: [],
     allLostList: [],
     monthlyExchanges: [],
@@ -285,21 +290,64 @@ function saveMonthlyRecap(data) {
   var timeStr = now.getHours().toString().padStart(2, '0') + ":" + now.getMinutes().toString().padStart(2, '0');
 
   // ═══════════════════════════════════════════════════════
-  // SECTION 1: BARANG TERLARIS (Columns A-D)
+  // SECTION 0: PENJUALAN PER KATEGORI (Columns A-B, Rows 1-8)
   // ═══════════════════════════════════════════════════════
   sheet.getRange("A1:D1").merge()
-    .setValue("🏆 BARANG TERLARIS - " + month)
-    .setFontWeight("bold").setFontSize(14)
-    .setBackground("#4285F4").setFontColor("#FFFFFF")
+    .setValue("💰 PENJUALAN PER KATEGORI - " + month)
+    .setFontWeight("bold").setFontSize(13)
+    .setBackground("#F57F17").setFontColor("#FFFFFF")
     .setHorizontalAlignment("center");
 
   sheet.getRange("A2:D2").merge()
     .setValue("🕒 Terakhir Update: " + timeStr + " WIB")
     .setFontWeight("bold").setFontSize(10)
+    .setBackground("#FFF8E1").setFontColor("#F57F17")
+    .setHorizontalAlignment("center");
+
+  var categorySales = data.categorySales || [];
+  var catRow = 3;
+  if (categorySales.length > 0) {
+    categorySales.forEach(function (cat) {
+      sheet.getRange(catRow, 1).setValue(cat.category)
+        .setFontWeight("bold").setFontSize(11).setFontColor("#E65100")
+        .setHorizontalAlignment("center");
+      sheet.getRange(catRow, 2).setValue(cat.total)
+        .setFontWeight("bold").setFontSize(11).setFontColor("#1B5E20")
+        .setNumberFormat("\"Rp\"#,##0");
+      sheet.getRange(catRow, 1, 1, 2)
+        .setBorder(true, true, true, true, true, true, "#FFD54F", SpreadsheetApp.BorderStyle.SOLID);
+      if (catRow % 2 == 0) {
+        sheet.getRange(catRow, 1, 1, 2).setBackground("#FFF8E1");
+      }
+      catRow++;
+    });
+  } else {
+    sheet.getRange(catRow, 1, 1, 2).merge()
+      .setValue("Belum ada data penjualan")
+      .setFontStyle("italic").setFontColor("#9E9E9E")
+      .setHorizontalAlignment("center");
+    catRow++;
+  }
+
+  // Spacer row before BARANG TERLARIS
+  var topItemsStartRow = catRow + 1;
+
+  // ═══════════════════════════════════════════════════════
+  // SECTION 1: BARANG TERLARIS (Columns A-D, starts after category sales)
+  // ═══════════════════════════════════════════════════════
+  sheet.getRange(topItemsStartRow, 1, 1, 4).merge()
+    .setValue("🏆 BARANG TERLARIS - " + month)
+    .setFontWeight("bold").setFontSize(14)
+    .setBackground("#4285F4").setFontColor("#FFFFFF")
+    .setHorizontalAlignment("center");
+
+  sheet.getRange(topItemsStartRow + 1, 1, 1, 4).merge()
+    .setValue("🕒 Terakhir Update: " + timeStr + " WIB")
+    .setFontWeight("bold").setFontSize(10)
     .setBackground("#E8EAF6").setFontColor("#3F51B5")
     .setHorizontalAlignment("center");
 
-  sheet.getRange("A3:D3")
+  sheet.getRange(topItemsStartRow + 2, 1, 1, 4)
     .setValues([["Rank", "Kode Barang", "Nama Barang", "Terjual (Pcs)"]])
     .setFontWeight("bold").setBackground("#E3F2FD")
     .setHorizontalAlignment("center")
@@ -307,6 +355,7 @@ function saveMonthlyRecap(data) {
 
   var items = data.items || [];
   var topItems = items.slice(0, 25);
+  var dataStartRow = topItemsStartRow + 3;
 
   if (topItems.length > 0) {
     var rows = topItems.map(function (item, index) {
@@ -317,17 +366,17 @@ function saveMonthlyRecap(data) {
       return [rankDisplay, item.kode, item.nama, item.quantity];
     });
 
-    sheet.getRange(4, 1, rows.length, 4).setValues(rows);
-    sheet.getRange(4, 1, rows.length, 4)
+    sheet.getRange(dataStartRow, 1, rows.length, 4).setValues(rows);
+    sheet.getRange(dataStartRow, 1, rows.length, 4)
       .setBorder(true, true, true, true, true, true, "#BBDEFB", SpreadsheetApp.BorderStyle.SOLID)
       .setFontColor("#1565C0").setFontWeight("bold").setVerticalAlignment("middle");
-    sheet.getRange(4, 1, rows.length, 1).setHorizontalAlignment("center");
-    sheet.getRange(4, 4, rows.length, 1).setNumberFormat("#,##0").setHorizontalAlignment("center");
+    sheet.getRange(dataStartRow, 1, rows.length, 1).setHorizontalAlignment("center");
+    sheet.getRange(dataStartRow, 4, rows.length, 1).setNumberFormat("#,##0").setHorizontalAlignment("center");
 
     for (var i = 0; i < rows.length; i++) {
-      if (i % 2 != 0) { sheet.getRange(4 + i, 1, 1, 4).setBackground("#F5F7FA"); }
+      if (i % 2 != 0) { sheet.getRange(dataStartRow + i, 1, 1, 4).setBackground("#F5F7FA"); }
     }
-    sheet.getRange(4, 1, Math.min(rows.length, 3), 4).setBackground("#E3F2FD");
+    sheet.getRange(dataStartRow, 1, Math.min(rows.length, 3), 4).setBackground("#E3F2FD");
   }
 
   // ═══════════════════════════════════════════════════════

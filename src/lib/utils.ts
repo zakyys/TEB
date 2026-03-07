@@ -20,6 +20,8 @@ export const LS_KEYS = {
   PRODUCT_GAS_URL: "pos_product_gas_url",
   TELEGRAM_BOT_TOKEN: "pos_telegram_bot_token",
   TELEGRAM_CHAT_ID: "pos_telegram_chat_id",
+  AUTO_SEND_SALES_ENABLED: "auto_send_sales_enabled",
+  AUTO_SEND_SALES_TIMES: "auto_send_sales_times",
 };
 
 // Local Storage Utility Functions
@@ -401,7 +403,9 @@ export function getConfig() {
     gasUrl: getFromLS<string>(LS_KEYS.GAS_URL, ""),
     productGasUrl: getFromLS<string>(LS_KEYS.PRODUCT_GAS_URL, ""),
     telegramBotToken: getFromLS<string>(LS_KEYS.TELEGRAM_BOT_TOKEN, ""),
-    telegramChatId: getFromLS<string>(LS_KEYS.TELEGRAM_CHAT_ID, "")
+    telegramChatId: getFromLS<string>(LS_KEYS.TELEGRAM_CHAT_ID, ""),
+    autoSendEnabled: getFromLS<boolean>(LS_KEYS.AUTO_SEND_SALES_ENABLED, false),
+    autoSendTimes: getFromLS<string>(LS_KEYS.AUTO_SEND_SALES_TIMES, "")
   };
 }
 

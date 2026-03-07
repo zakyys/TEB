@@ -1,0 +1,42 @@
+﻿diff --git a/dev-dist/sw.js b/dev-dist/sw.js
+index fc3074d..41ab127 100644
+--- a/dev-dist/sw.js
++++ b/dev-dist/sw.js
+@@ -79,7 +79,7 @@ define(['./workbox-ca84f546'], (function (workbox) { 'use strict';
+    */
+   workbox.precacheAndRoute([{
+     "url": "index.html",
+-    "revision": "0.ud8f9mle88"
++    "revision": "0.haea6286aok"
+   }], {});
+   workbox.cleanupOutdatedCaches();
+   workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("index.html"), {
+diff --git a/src/components/products/ProductManagement.tsx b/src/components/products/ProductManagement.tsx
+index 056212d..8dcd7b4 100644
+--- a/src/components/products/ProductManagement.tsx
++++ b/src/components/products/ProductManagement.tsx
+@@ -522,8 +522,22 @@ const ProductManagement = () => {
+   };
+ 
+   const saveNewProduct = () => {
+-    if (!newProduct.name || !newProduct.category || !newProduct.sku) {
+-      alert("Mohon lengkapi data produk");
++    // Auto-set category from SKU prefix
++    const prefix = (newProduct.sku || '').substring(0, 2).toUpperCase();
++    const autoCategory = (() => {
++      switch (prefix) {
++        case 'BG': return 'BG';
++        case 'BA': return 'BA';
++        case 'BK': return 'BK';
++        case 'TL': return 'TL';
++        case 'KG': return 'KG';
++        default: return 'Lainnya';
++      }
++    })();
++    newProduct.category = autoCategory;
++
++    if (!newProduct.name || !newProduct.sku) {
++      alert("Mohon lengkapi Kode dan Nama produk");
+       return;
+     }
+ 

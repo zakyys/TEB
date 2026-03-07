@@ -267,15 +267,16 @@ const ProductManagement = () => {
 
       await fetch(targetUrl, {
         method: "POST",
+        mode: "no-cors",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
           action: "updateProductActive",
           product: {
             kode: product.sku,
             nama: product.name,
-            hargaBeli: product.purchasePrice,
-            hargaJual: product.price,
-            stok: product.stock
+            hargaBeli: product.purchasePrice || 0,
+            hargaJual: product.price || 0,
+            stok: product.stock || 0
           }
         })
       });
@@ -522,8 +523,22 @@ const ProductManagement = () => {
   };
 
   const saveNewProduct = () => {
-    if (!newProduct.name || !newProduct.category || !newProduct.sku) {
-      alert("Mohon lengkapi data produk");
+    // Auto-set category from SKU prefix
+    const prefix = (newProduct.sku || '').substring(0, 2).toUpperCase();
+    const autoCategory = (() => {
+      switch (prefix) {
+        case 'BG': return 'BG';
+        case 'BA': return 'BA';
+        case 'BK': return 'BK';
+        case 'TL': return 'TL';
+        case 'KG': return 'KG';
+        default: return 'Lainnya';
+      }
+    })();
+    newProduct.category = autoCategory;
+
+    if (!newProduct.name || !newProduct.sku) {
+      alert("Mohon lengkapi Kode dan Nama produk");
       return;
     }
 

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -1052,6 +1052,34 @@ const Dashboard = () => {
       const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
       const monthYear = monthNames[now.getMonth()] + " " + now.getFullYear();
 
+      // ═══════════════════════════════════════════
+      // HITUNG PENJUALAN PER KATEGORI (berdasarkan prefix SKU)
+      // ═══════════════════════════════════════════
+      const categorySalesMap: Record<string, number> = {};
+      monthlyTransactions.forEach(t => {
+        t.items.forEach(item => {
+          const sku = (item.sku || '').toUpperCase();
+          const prefix = sku.substring(0, 2);
+          // Map prefix ke nama kategori
+          let category: string;
+          switch (prefix) {
+            case 'BA': category = 'BA'; break;
+            case 'BG': category = 'BG'; break;
+            case 'BK': category = 'BK'; break;
+            case 'TL': category = 'TL'; break;
+            case 'KG': category = 'KG'; break;
+            default: category = 'Lainnya'; break;
+          }
+          const itemTotal = item.quantity * item.price;
+          categorySalesMap[category] = (categorySalesMap[category] || 0) + itemTotal;
+        });
+      });
+
+      // Convert to sorted array for payload
+      const categorySales = Object.entries(categorySalesMap)
+        .map(([category, total]) => ({ category, total }))
+        .sort((a, b) => b.total - a.total); // Terbesar dulu
+
       if (monthlyItems.length > 0 || monthlyExchangesFormatted.length > 0 || getNotes().length > 0) { // Send if items, exchanges, OR notes exist
         const monthlyPayload = {
           action: "monthlyRecap",
@@ -1064,6 +1092,7 @@ const Dashboard = () => {
             transactionCount: item.transactionCount,
             totalSales: item.total
           })),
+          categorySales: categorySales, // NEW: Penjualan per kategori
           dailyVisitors: dailyVisitors,
           allLostList: allLostList,
           monthlyRefunds: combinedMonthlyRefunds, // NEW: Standardized Refund Data
@@ -1464,6 +1493,76 @@ const Dashboard = () => {
 
   // State untuk kirim rekap bulanan (tidak dipakai lagi tapi tetap ada untuk kompatibilitas)
   const [sendingMonthlyRecap, setSendingMonthlyRecap] = useState(false);
+
+  // === AUTO-KIRIM PENJUALAN BACKGROUND SERVICE ===
+  const sendToGoogleSheetsRef = useRef(sendToGoogleSheets);
+
+  useEffect(() => {
+    sendToGoogleSheetsRef.current = sendToGoogleSheets;
+  }); // update every render
+
+  const [currentConfig, setCurrentConfig] = useState(getConfig());
+
+  useEffect(() => {
+    const handleConfig = () => setCurrentConfig(getConfig());
+    window.addEventListener('configUpdated', handleConfig);
+    return () => window.removeEventListener('configUpdated', handleConfig);
+  }, []);
+
+  useEffect(() => {
+    // Check if auto send is enabled and times are configured
+    if (!currentConfig.autoSendEnabled || !currentConfig.autoSendTimes) return;
+
+    const times = currentConfig.autoSendTimes
+      .split(',')
+      .map(t => t.trim())
+      .filter(Boolean);
+
+    if (times.length === 0) return;
+
+    const intervalId = setInterval(() => {
+      const now = new Date();
+      const hour = now.getHours().toString().padStart(2, '0');
+      const min = now.getMinutes().toString().padStart(2, '0');
+      const currentHourMinute = `${hour}:${min}`;
+
+      // Ambil tgl lokal agar sesuai zona waktu pengguna
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+      try {
+        const lastExecutedRaw = localStorage.getItem('auto_send_last_executed');
+        const lastExecuted = lastExecutedRaw ? JSON.parse(lastExecutedRaw) : {};
+
+        let shouldSend = false;
+        let triggeredTime = '';
+
+        for (const time of times) {
+          // Jika waktu sekarang sudah melewati atau sama dengan waktu jadwal
+          if (currentHourMinute >= time) {
+            // Cek apakah hari ini jadwal tersebut sudah tereksekusi
+            if (lastExecuted[time] !== todayStr) {
+              shouldSend = true;
+              triggeredTime = time;
+              lastExecuted[time] = todayStr; // Tandai sudah tereksekusi hari ini
+            }
+          }
+        }
+
+        if (shouldSend) {
+          console.log(`[AutoSend] Jadwal ${triggeredTime} telah tiba/terlewat (Waktu sekarang: ${currentHourMinute}), memicu pengiriman otomatis...`);
+          localStorage.setItem('auto_send_last_executed', JSON.stringify(lastExecuted));
+
+          setTimeout(() => {
+            sendToGoogleSheetsRef.current();
+          }, 1500);
+        }
+      } catch (e) {
+        console.error("Auto send error", e);
+      }
+    }, 20000); // Check every 20 seconds
+
+    return () => clearInterval(intervalId);
+  }, [currentConfig.autoSendEnabled, currentConfig.autoSendTimes]);
 
   return (
     <div className="flex flex-col min-h-screen bg-background">
