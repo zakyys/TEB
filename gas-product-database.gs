@@ -1,14 +1,18 @@
 /**
- * GOOGLE APPS SCRIPT - KHUSUS DATABASE PRODUK (GoldenPOS)
- * 
- * Layout:
- *   Row 1: 🕐 Terakhir Upload : [timestamp]
- *   Row 2: 🕐 Terakhir Kasir Sync : [timestamp]
+ * GOLDENPOS - GAS DATABASE PRODUK
+ *
+ * Gunakan file ini pada deployment URL GAS Database Produk.
+ *
+ * Sheet yang dikelola:
+ *   BA, BG, BK, KG, TL, ALL PRODUK, MASTER
+ *
+ * Layout sheet kategori:
+ *   Row 1: Terakhir Upload
+ *   Row 2: Terakhir Kasir Sync
  *   Row 3: KODE | Nama | Harga Beli | Harga Jual | Stok | Gross Margin %
  *   Row 4+: Data produk
- * 
- * Sheet: BA, BG, BK, KG, TL, ALL PRODUK
- * Mode: AUTO REPLACE
+ *
+ * Jangan digabung dengan gas-report-transactions.gs.
  */
 
 var CATEGORY_SHEETS = ["BA", "BG", "BK", "KG", "TL"];
@@ -182,6 +186,14 @@ function doPost(e) {
         // =====================================================
         if (action === "updateProductActive") {
             var p = data.product;
+            if (!p || !String(p.kode || '').trim() || !String(p.nama || '').trim()) {
+                return createJsonResponse({ success: false, error: "KODE dan nama produk wajib diisi" });
+            }
+            if (!isFinite(Number(p.hargaBeli)) || Number(p.hargaBeli) < 0 ||
+                !isFinite(Number(p.hargaJual)) || Number(p.hargaJual) < 0 ||
+                !isFinite(Number(p.stok))) {
+                return createJsonResponse({ success: false, error: "Harga harus valid dan stok harus berupa angka" });
+            }
             var sheetName = getSheetNameFromCode(p.kode);
             var sheet = ss.getSheetByName(sheetName);
             if (!sheet) {
@@ -225,6 +237,25 @@ function doPost(e) {
         if (action === "bulkUpdateProducts") {
             var allProducts = data.products || [];
             if (allProducts.length === 0) return createJsonResponse({ success: false, error: "Tidak ada data produk" });
+            if (allProducts.length > 5000) return createJsonResponse({ success: false, error: "Maksimal 5000 produk per upload" });
+
+            var seenCodes = {};
+            for (var productIndex = 0; productIndex < allProducts.length; productIndex++) {
+                var product = allProducts[productIndex];
+                var code = String(product.kode || '').trim().toUpperCase();
+                if (!code || !String(product.nama || '').trim()) {
+                    return createJsonResponse({ success: false, error: "Setiap produk wajib memiliki KODE dan nama" });
+                }
+                if (seenCodes[code]) {
+                    return createJsonResponse({ success: false, error: "SKU duplikat: " + code });
+                }
+                seenCodes[code] = true;
+                if (!isFinite(Number(product.hargaBeli)) || Number(product.hargaBeli) < 0 ||
+                    !isFinite(Number(product.hargaJual)) || Number(product.hargaJual) < 0 ||
+                    !isFinite(Number(product.stok))) {
+                    return createJsonResponse({ success: false, error: "Harga harus valid dan stok harus berupa angka (stok boleh negatif)" });
+                }
+            }
 
             // Kelompokkan produk berdasarkan prefix kode
             var grouped = {};
@@ -306,6 +337,12 @@ function doPost(e) {
         if (action === "batchUpdateStock") {
             var stockUpdates = data.updates || []; // [{kode: "BG-001", stok: 50}, ...]
             if (stockUpdates.length === 0) return createJsonResponse({ success: false, error: "Tidak ada data stok" });
+            if (stockUpdates.length > 5000) return createJsonResponse({ success: false, error: "Maksimal 5000 update stok per request" });
+            for (var updateIndex = 0; updateIndex < stockUpdates.length; updateIndex++) {
+                if (!String(stockUpdates[updateIndex].kode || '').trim() || !isFinite(Number(stockUpdates[updateIndex].stok))) {
+                    return createJsonResponse({ success: false, error: "Kode dan stok harus valid (stok boleh negatif)" });
+                }
+            }
 
             var updatedCount = 0;
 

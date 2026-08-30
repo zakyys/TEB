@@ -121,12 +121,11 @@ function App() {
       // Best-effort async IndexedDB write (may not complete)
       flushProductCache();
 
-      // Synchronous localStorage fallback — guaranteed to persist
+      // Synchronous localStorage fallback — guaranteed to persist.
+      // Keep [] too, because an intentional delete-all is valid state.
       try {
         const currentProducts = getProducts();
-        if (currentProducts && currentProducts.length > 0) {
-          localStorage.setItem('PRODUCTS', JSON.stringify(currentProducts));
-        }
+        localStorage.setItem('PRODUCTS', JSON.stringify(currentProducts || []));
       } catch (e) {
         console.error('[App] Sync flush fallback failed:', e);
       }

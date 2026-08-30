@@ -1,16 +1,14 @@
 /**
- * Google Apps Script untuk GoldenPOS
+ * GOLDENPOS - GAS LAPORAN & TRANSAKSI
+ *
+ * Gunakan file ini pada deployment URL GAS Laporan & Transaksi.
  * Fitur:
- * - Kirim data penjualan harian
- * - Kirim data tukar/refund
- * - Kirim data tamu (<12 dan >12) + daftar lost
- * - Sync produk 2-arah (Sheet <-> Website)
- * 
- * UPDATE: 
- * - Item hutang diwarnai MERAH di tabel penjualan
- * - HUTANG HARI INI muncul kalau ada hutang belum lunas
- * - PELUNASAN HUTANG muncul kalau ada pelunasan dari hari sebelumnya
- * - Kalau dilunasi sore, item jadi hitam lagi & HUTANG HARI INI hilang
+ * - Laporan penjualan harian
+ * - Rekap bulanan dan penjualan per kategori
+ * - Data tamu, catatan, hutang, refund, dan tukar barang
+ * - Notifikasi Telegram dan backup ke Google Drive
+ *
+ * Jangan digabung dengan gas-product-database.gs.
  */
 
 function doGet(e) {

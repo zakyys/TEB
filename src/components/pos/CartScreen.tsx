@@ -161,10 +161,11 @@ const CartScreen = () => {
     setCachedProducts(updatedProducts);
 
     // ★ Push stock changes to Google Sheet (bidirectional sync)
+    const productsBySku = new Map(updatedProducts.map((p: any) => [String(p.sku ?? '').trim().toUpperCase(), p]));
     const stockUpdates = cart
       .filter(i => i.sku && i.sku !== '-')
       .map(cartItem => {
-        const prod = updatedProducts.find((p: any) => p.sku === cartItem.sku);
+        const prod = productsBySku.get(String(cartItem.sku).trim().toUpperCase());
         return prod ? { sku: prod.sku, stock: prod.stock ?? 0 } : null;
       })
       .filter(Boolean) as Array<{ sku: string; stock: number }>;
@@ -257,10 +258,11 @@ const CartScreen = () => {
     setCachedProducts(updatedProducts);
 
     // ★ Push stock changes to Google Sheet (bidirectional sync)
+    const productsBySkuHutang = new Map(updatedProducts.map((p: any) => [String(p.sku ?? '').trim().toUpperCase(), p]));
     const stockUpdatesHutang = cart
       .filter(i => i.sku && i.sku !== '-')
       .map(cartItem => {
-        const prod = updatedProducts.find((p: any) => p.sku === cartItem.sku);
+        const prod = productsBySkuHutang.get(String(cartItem.sku).trim().toUpperCase());
         return prod ? { sku: prod.sku, stock: prod.stock ?? 0 } : null;
       })
       .filter(Boolean) as Array<{ sku: string; stock: number }>;

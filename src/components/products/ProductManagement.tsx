@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency, getConfig } from "@/lib/utils";
 import { getProducts as getCachedProducts, setProducts as setCachedProducts } from "@/lib/productCache";
-import { DUMMY_PRODUCTS } from "@/lib/dummyData";
 import {
   Search,
   Plus,
@@ -157,10 +156,11 @@ const ProductManagement = () => {
   const [selectedMarginRange, setSelectedMarginRange] = useState<string>("all");
   const [selectedPrefix, setSelectedPrefix] = useState<string>("all");
   const [showProfitAnalysis, setShowProfitAnalysis] = useState(false);
-
+  const syncRequestRef = React.useRef(0);
 
   // Sync products from Google Sheets - MIRROR MODE (App follows Sheet exactly)
   const syncFromSheets = async (isAuto = false) => {
+    const requestId = ++syncRequestRef.current;
     if (!isAuto) {
       if (!confirm("Apakah Anda yakin ingin sinkronisasi data? \n\nData produk di HP akan diperbarui mengikuti data terbaru dari Google Sheet.")) return;
       setIsSyncing(true);
@@ -168,14 +168,22 @@ const ProductManagement = () => {
     }
     try {
       const config = getConfig();
-      const targetUrl = config.productGasUrl || config.gasUrl;
+      // Product sync must use the dedicated product deployment. Falling back to
+      // the report deployment can return a valid-looking but incompatible API.
+      const targetUrl = config.productGasUrl;
 
       if (!targetUrl) {
-        if (!isAuto) throw new Error("URL Google Sheets belum dikonfigurasi di Setting");
+        if (!isAuto) throw new Error("URL GAS Database Produk belum dikonfigurasi di Setting");
+        console.warn('[ProductSync] Skipped: product GAS URL is not configured');
         return;
       }
 
-      const response = await fetch(targetUrl + "?action=getProducts");
+      const response = await fetch(`${targetUrl}?action=getProducts&_=${Date.now()}`, {
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        throw new Error(`Server mengembalikan status ${response.status}`);
+      }
       const text = await response.text();
 
       // Parse response
@@ -186,68 +194,106 @@ const ProductManagement = () => {
         throw new Error("Format response tidak valid");
       }
 
-      if (data.error) {
-        throw new Error(data.error);
+      if (data.success !== true || !Array.isArray(data.products)) {
+        throw new Error(data.error || "Response Database Produk tidak valid");
       }
 
-      if (data.products && Array.isArray(data.products)) {
-        // Auto-detect kategori dari prefix kode
-        const getCategoryFromCode = (code: string): string => {
-          const prefix = code.substring(0, 2).toUpperCase();
-          switch (prefix) {
-            case 'BA': return 'BAUT OTOMOTIF';
-            case 'BG': return 'BAUT GENERAL';
-            case 'BK': return 'BAUT KAYU';
-            case 'KG': return 'KILOGRAM';
-            case 'TL': return 'TOOLS';
-            default: return 'UMUM';
-          }
-        };
-
-        // Build lookup map of current local products (by SKU) to preserve stock during auto-sync
-        const localProducts = getCachedProducts();
-        const localStockMap = new Map<string, { stock: number; id: string }>();
-        localProducts.forEach((p: any) => {
-          if (p.sku) {
-            localStockMap.set(p.sku.toUpperCase(), { stock: p.stock ?? 0, id: p.id });
-          }
-        });
-
-        // MERGE: Take name/price from Sheet
-        // Stock strategy:
-        //   - Auto-sync (background): KEEP local stock (prevent silent overwrite from stale Sheet)
-        //   - Manual sync (user clicks): TAKE Sheet stock (user intentionally wants Sheet data)
-        const sheetProducts: Product[] = data.products.map((sheetProd: any) => {
-          const sku = String(sheetProd.kode || "").toUpperCase();
-          const localData = localStockMap.get(sku);
-          const sheetStock = Number(sheetProd.stok) || 0;
-
-          return {
-            id: localData?.id || `prod-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            sku,
-            name: sheetProd.nama || "",
-            category: getCategoryFromCode(sheetProd.kode || ""),
-            price: Number(sheetProd.hargaJual) || 0,
-            purchasePrice: Number(sheetProd.hargaBeli) || 0,
-            // ★ Auto-sync: keep local stock | Manual sync: take Sheet stock
-            stock: isAuto ? (localData !== undefined ? localData.stock : sheetStock) : sheetStock,
-            type: "product",
-            threshold: 5
-          };
-        });
-
-        setCachedProducts(sheetProducts);
-        setProducts(sheetProducts);
-        try { window.dispatchEvent(new CustomEvent('pos:products:update', { detail: sheetProducts })); } catch { }
-
+      if (data.products.length === 0) {
+        const localCount = getCachedProducts().length;
+        if (localCount > 0) {
+          throw new Error(`Database Produk mengembalikan 0 produk. Data lokal (${localCount} produk) tidak diubah.`);
+        }
         if (!isAuto) {
+          alert("Database Produk masih kosong. Data lokal tidak diubah.");
+          setSyncMessage("⚠ Database Produk kosong; tidak ada perubahan diterapkan");
+        }
+        return;
+      }
+
+      // Auto-detect kategori dari prefix kode
+      const getCategoryFromCode = (code: string): string => {
+        const prefix = code.substring(0, 2).toUpperCase();
+        switch (prefix) {
+          case 'BA': return 'BAUT OTOMOTIF';
+          case 'BG': return 'BAUT GENERAL';
+          case 'BK': return 'BAUT KAYU';
+          case 'KG': return 'KILOGRAM';
+          case 'TL': return 'TOOLS';
+          default: return 'UMUM';
+        }
+      };
+
+      const parseSheetNumber = (value: unknown, field: string, sku: string): number => {
+        if (value === null || value === undefined || String(value).trim() === '') return 0;
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) {
+          throw new Error(`Nilai ${field} untuk SKU ${sku} tidak valid`);
+        }
+        // Stok boleh negatif; jangan gunakan Math.max atau validasi >= 0.
+        return parsed;
+      };
+
+      // Validasi penuh sebelum cache lokal disentuh.
+      const seenSkus = new Set<string>();
+      const invalidRows: string[] = [];
+      const normalizedSheetProducts = data.products.map((sheetProd: any, index: number) => {
+        const rowNumber = index + 4; // data dimulai dari baris 4 di sheet produk
+        const sku = String(sheetProd.kode ?? '').trim().toUpperCase();
+        const name = String(sheetProd.nama ?? '').trim();
+        if (!sku) invalidRows.push(`Baris ${rowNumber}: KODE/SKU kosong`);
+        if (!name) invalidRows.push(`Baris ${rowNumber}: Nama produk kosong`);
+        if (sku && seenSkus.has(sku)) invalidRows.push(`Baris ${rowNumber}: SKU ${sku} duplikat`);
+        if (sku) seenSkus.add(sku);
+
+        return {
+          sku,
+          name,
+          category: getCategoryFromCode(sku),
+          price: parseSheetNumber(sheetProd.hargaJual, 'Harga Jual', sku || '(kosong)'),
+          purchasePrice: parseSheetNumber(sheetProd.hargaBeli, 'Harga Beli', sku || '(kosong)'),
+          stock: parseSheetNumber(sheetProd.stok, 'Stok', sku || '(kosong)'),
+        };
+      });
+      if (invalidRows.length > 0) {
+        throw new Error(`Data Database Produk tidak valid:\n\n${invalidRows.slice(0, 20).join('\n')}${invalidRows.length > 20 ? `\n... dan ${invalidRows.length - 20} masalah lainnya` : ''}`);
+      }
+
+      // Build lookup map of current local products (by SKU) to preserve stock during auto-sync.
+      const localProducts = getCachedProducts();
+      const localBySku = new Map<string, { stock: number; id: string }>();
+      localProducts.forEach((p: any) => {
+        const sku = String(p.sku ?? '').trim().toUpperCase();
+        if (sku) localBySku.set(sku, { stock: p.stock ?? 0, id: p.id });
+      });
+
+      // MERGE: Take name/price from Sheet.
+      // Auto-sync keeps local stock; manual sync intentionally takes Sheet stock.
+      const sheetProducts: Product[] = normalizedSheetProducts.map((sheetProd) => {
+        const localData = localBySku.get(sheetProd.sku);
+        return {
+          id: localData?.id || `prod-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          sku: sheetProd.sku,
+          name: sheetProd.name,
+          category: sheetProd.category,
+          price: sheetProd.price,
+          purchasePrice: sheetProd.purchasePrice,
+          // Stok negatif tetap dipertahankan.
+          stock: isAuto ? (localData !== undefined ? localData.stock : sheetProd.stock) : sheetProd.stock,
+          type: "product",
+          threshold: 5
+        };
+      });
+
+      if (requestId !== syncRequestRef.current) return;
+      setCachedProducts(sheetProducts);
+      setProducts(sheetProducts);
+      try { window.dispatchEvent(new CustomEvent('pos:products:update', { detail: sheetProducts })); } catch { }
+
+      if (!isAuto) {
           alert(`✅ Sinkronisasi Berhasil!\n\n${sheetProducts.length} produk di HP diperbarui dari Google Sheet (termasuk stok).`);
           setSyncMessage(`✓ Berhasil sync ${sheetProducts.length} produk`);
-        }
-        setTimeout(() => setSyncMessage(""), 5000);
-      } else {
-        throw new Error("Data produk tidak ditemukan");
       }
+      setTimeout(() => setSyncMessage(""), 5000);
     } catch (error) {
       if (!isAuto) {
         setSyncMessage(`✗ Gagal: ${(error as Error).message}`);
@@ -262,12 +308,11 @@ const ProductManagement = () => {
   const pushProductToSheet = async (product: Product) => {
     try {
       const config = getConfig();
-      const targetUrl = config.productGasUrl || config.gasUrl;
+      const targetUrl = config.productGasUrl;
       if (!targetUrl) return;
 
-      await fetch(targetUrl, {
+      const response = await fetch(targetUrl, {
         method: "POST",
-        mode: "no-cors",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
           action: "updateProductActive",
@@ -280,6 +325,9 @@ const ProductManagement = () => {
           }
         })
       });
+      if (!response.ok) {
+        throw new Error(`Server mengembalikan status ${response.status}`);
+      }
       console.log(`[Sync] Updated ${product.sku} on Sheet`);
     } catch (error) {
       console.error("Failed to push product to sheet:", error);
@@ -290,10 +338,10 @@ const ProductManagement = () => {
   const deleteProductFromSheet = async (sku: string) => {
     try {
       const config = getConfig();
-      const targetUrl = config.productGasUrl || config.gasUrl;
+      const targetUrl = config.productGasUrl;
       if (!targetUrl || !sku) return;
 
-      await fetch(targetUrl, {
+      const response = await fetch(targetUrl, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
@@ -301,6 +349,9 @@ const ProductManagement = () => {
           kode: sku
         })
       });
+      if (!response.ok) {
+        throw new Error(`Server mengembalikan status ${response.status}`);
+      }
       console.log(`[Sync] Deleted ${sku} from Sheet`);
     } catch (error) {
       console.error("Failed to delete product from sheet:", error);
@@ -313,12 +364,9 @@ const ProductManagement = () => {
   // Load products from localStorage and listen to external updates
   useEffect(() => {
     const storedProducts = getCachedProducts() as Product[];
-    if (storedProducts.length === 0) {
-      setCachedProducts(DUMMY_PRODUCTS);
-      setProducts(DUMMY_PRODUCTS);
-    } else {
-      setProducts(storedProducts);
-    }
+    // Cache [] adalah state yang valid (misalnya setelah Hapus Semua), jadi
+    // jangan mengisinya kembali dengan produk contoh.
+    setProducts(storedProducts);
 
     // AUTO-SYNC dari Sheet saat buka halaman
     syncFromSheets(true);
@@ -524,7 +572,8 @@ const ProductManagement = () => {
 
   const saveNewProduct = () => {
     // Auto-set category from SKU prefix
-    const prefix = (newProduct.sku || '').substring(0, 2).toUpperCase();
+    const normalizedSku = (newProduct.sku || '').trim().toUpperCase();
+    const prefix = normalizedSku.substring(0, 2);
     const autoCategory = (() => {
       switch (prefix) {
         case 'BG': return 'BG';
@@ -537,19 +586,24 @@ const ProductManagement = () => {
     })();
     newProduct.category = autoCategory;
 
-    if (!newProduct.name || !newProduct.sku) {
+    const normalizedName = (newProduct.name || '').trim().toUpperCase();
+    if (!normalizedName || !normalizedSku) {
       alert("Mohon lengkapi Kode dan Nama produk");
+      return;
+    }
+    if (products.some(p => String(p.sku || '').trim().toUpperCase() === normalizedSku)) {
+      alert(`Kode ${normalizedSku} sudah digunakan.`);
       return;
     }
 
     const productToAdd = {
       ...newProduct,
       id: `P-${Date.now()}`,
-      name: newProduct.name || "",
+      name: normalizedName,
       category: newProduct.category || "",
       price: newProduct.price || 0,
       stock: newProduct.type === "product" ? newProduct.stock || 0 : undefined,
-      sku: newProduct.sku || "",
+      sku: normalizedSku,
       type: newProduct.type || "product",
       threshold:
         newProduct.type === "product" ? newProduct.threshold || 5 : undefined,
@@ -574,16 +628,27 @@ const ProductManagement = () => {
 
   const saveEditedProduct = () => {
     if (!selectedProduct) return;
+    const normalizedSku = String(selectedProduct.sku || '').trim().toUpperCase();
+    const normalizedName = String(selectedProduct.name || '').trim().toUpperCase();
+    if (!normalizedSku || !normalizedName) {
+      alert("KODE dan Nama produk wajib diisi.");
+      return;
+    }
+    if (products.some(p => p.id !== selectedProduct.id && String(p.sku || '').trim().toUpperCase() === normalizedSku)) {
+      alert(`Kode ${normalizedSku} sudah digunakan.`);
+      return;
+    }
+    const productToSave = { ...selectedProduct, sku: normalizedSku, name: normalizedName };
 
     const updatedProducts = products.map((product) =>
-      product.id === selectedProduct.id ? selectedProduct : product,
+      product.id === selectedProduct.id ? productToSave : product,
     );
 
     setProducts(updatedProducts);
     setCachedProducts(updatedProducts);
 
     // AUTO-PUSH ke Google Sheet
-    pushProductToSheet(selectedProduct);
+    pushProductToSheet(productToSave);
 
     setIsEditProductOpen(false);
   };
@@ -1195,79 +1260,107 @@ const ProductManagement = () => {
                     }
                   };
 
-                  let imported: any[] = [];
+                  let imported: Product[] = [];
 
                   try {
                     const buffer = await file.arrayBuffer();
                     const workbook = XLSX.read(buffer, { type: 'array' });
-                    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-                    const data: any[] = XLSX.utils.sheet_to_json(firstSheet);
+                    const firstSheetName = workbook.SheetNames[0];
+                    if (!firstSheetName) {
+                      alert('File Excel tidak memiliki sheet');
+                      return;
+                    }
+                    const firstSheet = workbook.Sheets[firstSheetName];
+                    const data: any[] = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
 
                     if (data.length === 0) {
                       alert('Tidak ada data yang ditemukan dalam file');
                       return;
                     }
 
-                    imported = data.map((obj: any) => {
-                      // Log untuk debug
-                      console.log('Import row:', obj);
+                    const getCell = (obj: any, keys: string[]) => {
+                      for (const key of keys) {
+                        if (obj[key] !== undefined && obj[key] !== null && String(obj[key]).trim() !== '') {
+                          return obj[key];
+                        }
+                      }
+                      return '';
+                    };
 
-                      const kode = (
-                        obj.KODE || obj.kode || obj.Code || obj.code ||
-                        obj['Code '] || obj['KODE '] || ''
-                      ).toString().toUpperCase().trim();
+                    const parseImportNumber = (value: unknown, field: string, rowNumber: number): number => {
+                      if (value === null || value === undefined || String(value).trim() === '') return 0;
+                      const parsed = typeof value === 'number'
+                        ? value
+                        : Number(String(value).replace(/[^0-9-]/g, ''));
+                      if (!Number.isFinite(parsed)) {
+                        throw new Error(`Baris ${rowNumber}: ${field} harus berupa angka`);
+                      }
+                      return parsed;
+                    };
 
-                      const category = getCategoryFromCode(kode);
+                    const seenSkus = new Set<string>();
+                    const errors: string[] = [];
+                    imported = data.map((obj: any, index: number) => {
+                      const rowNumber = index + 2; // baris 1 adalah header Excel
+                      const kode = String(getCell(obj, [
+                        'KODE', 'kode', 'Code', 'code', 'Code ', 'KODE '
+                      ])).toUpperCase().trim();
+                      const name = String(getCell(obj, [
+                        'NAMA BARANG', 'Nama Barang', 'Nama barang',
+                        'NAMA', 'nama', 'Name', 'name'
+                      ])).toUpperCase().trim();
+                      const purchasePrice = parseImportNumber(getCell(obj, [
+                        'HARGA MODAL', 'HARGA_MODAL', 'Modal (Price)',
+                        'Modal', 'MODAL', 'modal', 'Harga Modal'
+                      ]), 'Harga Modal', rowNumber);
+                      const price = parseImportNumber(getCell(obj, [
+                        'HARGA JUAL', 'HARGA_JUAL', 'Harga Jual',
+                        'Harga jual', 'HARGA', 'harga', 'Jual', 'jual'
+                      ]), 'Harga Jual', rowNumber);
+                      // Stok BOLEH negatif; hanya harus berupa angka yang valid.
+                      const stock = parseImportNumber(getCell(obj, [
+                        'STOK AKHIR', 'STOK_AKHIR', 'STOK', 'stok', 'Qty', 'qty'
+                      ]), 'Stok', rowNumber);
 
-                      // Extract purchase price (modal)
-                      const purchasePrice = parseInt(
-                        obj['HARGA MODAL'] || obj['HARGA_MODAL'] ||
-                        obj['Modal (Price)'] || obj['Modal'] || obj['MODAL'] ||
-                        obj.modal || obj['Harga Modal'] ||
-                        0
-                      ) || 0;
-
-                      // Extract selling price (harga jual)
-                      const price = parseInt(
-                        obj['HARGA JUAL'] || obj['HARGA_JUAL'] ||
-                        obj['Harga Jual'] || obj['Harga jual'] ||
-                        obj.HARGA || obj.harga || obj.Jual || obj.jual ||
-                        0
-                      ) || 0;
-
-                      // Extract stock
-                      const stock = parseInt(
-                        obj['STOK AKHIR'] || obj['STOK_AKHIR'] ||
-                        obj.STOK || obj.stok || obj.Qty || obj.qty ||
-                        0
-                      ) || 0;
+                      if (!kode) errors.push(`Baris ${rowNumber}: KODE/SKU kosong`);
+                      if (!name) errors.push(`Baris ${rowNumber}: Nama produk kosong`);
+                      if (kode && seenSkus.has(kode)) errors.push(`Baris ${rowNumber}: SKU ${kode} duplikat di file`);
+                      if (kode) seenSkus.add(kode);
+                      if (purchasePrice < 0) errors.push(`Baris ${rowNumber}: Harga Modal tidak boleh negatif`);
+                      if (price < 0) errors.push(`Baris ${rowNumber}: Harga Jual tidak boleh negatif`);
 
                       return {
                         id: `P-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                        name: (
-                          obj['NAMA BARANG'] || obj['Nama Barang'] || obj['Nama barang'] ||
-                          obj.NAMA || obj.nama || obj.Name || obj.name || ''
-                        ).toString().toUpperCase().trim() || '-',
-                        category: category,
-                        sku: kode || '-',
-                        purchasePrice: purchasePrice,
-                        price: price,
-                        stock: stock,
+                        name,
+                        category: getCategoryFromCode(kode),
+                        sku: kode,
+                        purchasePrice,
+                        price,
+                        stock,
                         type: 'product',
                         threshold: 5,
-                      };
+                      } as Product;
                     });
 
-                    // Merge with existing products: update if SKU exists, add if new
+                    if (errors.length > 0) {
+                      throw new Error(`Import dibatalkan karena data tidak valid:\n\n${errors.slice(0, 20).join('\n')}${errors.length > 20 ? `\n... dan ${errors.length - 20} masalah lainnya` : ''}`);
+                    }
+
+                    // Merge by normalized SKU in O(existing + imported), not nested findIndex.
                     const updatedProducts = [...products];
+                    const indexBySku = new Map<string, number>();
+                    updatedProducts.forEach((product, index) => {
+                      const sku = String(product.sku ?? '').trim().toUpperCase();
+                      if (sku) indexBySku.set(sku, index);
+                    });
                     let addedCount = 0;
                     let updatedCount = 0;
 
                     imported.forEach((importedProduct) => {
-                      const existingIndex = updatedProducts.findIndex(p => p.sku === importedProduct.sku);
+                      const existingIndex = indexBySku.get(importedProduct.sku.toUpperCase());
 
-                      if (existingIndex >= 0) {
-                        // Update existing product - keep ID and update all fields
+                      if (existingIndex !== undefined) {
+                        // Update existing product - keep ID and update editable fields.
                         updatedProducts[existingIndex] = {
                           ...updatedProducts[existingIndex],
                           name: importedProduct.name,
@@ -1278,7 +1371,7 @@ const ProductManagement = () => {
                         };
                         updatedCount++;
                       } else {
-                        // Add new product
+                        indexBySku.set(importedProduct.sku.toUpperCase(), updatedProducts.length);
                         updatedProducts.push(importedProduct);
                         addedCount++;
                       }

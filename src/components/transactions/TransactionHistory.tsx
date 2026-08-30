@@ -480,7 +480,8 @@ const TransactionHistory: React.FC = () => {
       // ★ Reduce stock for ALL refund cancellations (same-day AND different-day)
       // Refund added stock, so cancelling must subtract it back
       const products = getProducts();
-      const productIndex = products.findIndex(p => p.sku === itemToDelete.sku || p.name === itemToDelete.name);
+      const itemSku = String(itemToDelete.sku || '').trim().toUpperCase();
+      const productIndex = products.findIndex(p => String(p.sku || '').trim().toUpperCase() === itemSku || p.name === itemToDelete.name);
       if (productIndex !== -1 && products[productIndex].stock !== undefined) {
         const qtyToReduce = (itemToDelete as any).refundedQty || itemToDelete.quantity || 1;
         products[productIndex].stock -= qtyToReduce;
@@ -507,8 +508,9 @@ const TransactionHistory: React.FC = () => {
     // Normal delete flow (not refunded item)
     // Return stock
     const products = getProducts();
+    const itemSku = String(itemToDelete.sku || '').trim().toUpperCase();
     const productIndex = products.findIndex(
-      p => p.sku === itemToDelete.sku || p.name === itemToDelete.name
+      p => String(p.sku || '').trim().toUpperCase() === itemSku || p.name === itemToDelete.name
     );
     if (productIndex !== -1 && products[productIndex].stock !== undefined) {
       products[productIndex].stock += itemToDelete.quantity || 1;
@@ -557,7 +559,8 @@ const TransactionHistory: React.FC = () => {
 
     // Update stock first
     const products = getProducts();
-    const productIndex = products.findIndex((p: any) => p.sku === item.sku || p.name === item.name);
+    const itemSku = String(item.sku || '').trim().toUpperCase();
+    const productIndex = products.findIndex((p: any) => String(p.sku || '').trim().toUpperCase() === itemSku || p.name === item.name);
     if (productIndex !== -1 && products[productIndex].type === 'product') {
       products[productIndex].stock = (products[productIndex].stock || 0) + qtyDiff;
       setProducts(products);
@@ -642,9 +645,10 @@ const TransactionHistory: React.FC = () => {
         });
       }
 
-      // Update stock (return item) - only for qtyToReturn
+      // Update stock (return item) - only for qtyToReturn. Negative stock is valid.
+      const normalizedSku = String(sku || '').trim().toUpperCase();
       const updatedProducts = products.map(p => {
-        if (p.sku === sku && p.stock !== undefined) {
+        if (String(p.sku || '').trim().toUpperCase() === normalizedSku && p.stock !== undefined) {
           return { ...p, stock: p.stock + qtyToReturn };
         }
         return p;
@@ -653,7 +657,7 @@ const TransactionHistory: React.FC = () => {
       window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
 
       // ★ Push stock to Sheet (bidirectional sync)
-      pushStockToSheet([{ sku, stock: updatedProducts.find((p: any) => p.sku === sku)?.stock ?? 0 }]);
+      pushStockToSheet([{ sku, stock: updatedProducts.find((p: any) => String(p.sku || '').trim().toUpperCase() === normalizedSku)?.stock ?? 0 }]);
 
       // Smart refund logic (already checked at function start)
       if (isSameDayRefund) {
@@ -799,7 +803,8 @@ const TransactionHistory: React.FC = () => {
         }
 
         // Accumulate stock changes
-        const pIdx = currentProducts.findIndex(p => p.sku === sku && p.stock !== undefined);
+        const normalizedSku = String(sku || '').trim().toUpperCase();
+        const pIdx = currentProducts.findIndex(p => String(p.sku || '').trim().toUpperCase() === normalizedSku && p.stock !== undefined);
         if (pIdx !== -1) {
           currentProducts[pIdx].stock += item.quantity;
         }
@@ -812,7 +817,8 @@ const TransactionHistory: React.FC = () => {
       const stockUpdates = selectedTransaction.items
         .filter(item => item.sku && item.sku !== '-')
         .map(item => {
-          const prod = currentProducts.find((p: any) => p.sku === item.sku);
+          const itemSku = String(item.sku || '').trim().toUpperCase();
+          const prod = currentProducts.find((p: any) => String(p.sku || '').trim().toUpperCase() === itemSku);
           return prod ? { sku: prod.sku, stock: prod.stock ?? 0 } : null;
         })
         .filter(Boolean) as Array<{ sku: string; stock: number }>;
@@ -955,12 +961,16 @@ const TransactionHistory: React.FC = () => {
       originalPurchaseDate: selectedTransaction.date // Tanggal beli awal
     });
 
-    // Update stock: +returned qty for returned item, -new qty for new item
+    // Update stock: +returned qty for returned item, -new qty for new item.
+    // Negative stock is valid and is intentionally not clamped.
+    const normalizedOldSku = String(oldSku || '').trim().toUpperCase();
+    const normalizedNewSku = String(selectedNewProduct.sku || '').trim().toUpperCase();
     let updatedProducts = products.map(p => {
-      if (p.sku === oldSku && p.stock !== undefined) {
+      const sku = String(p.sku || '').trim().toUpperCase();
+      if (sku === normalizedOldSku && p.stock !== undefined) {
         return { ...p, stock: p.stock + qtyToReturn };
       }
-      if (p.sku === selectedNewProduct.sku && p.stock !== undefined) {
+      if (sku === normalizedNewSku && p.stock !== undefined) {
         return { ...p, stock: p.stock - newQty };
       }
       return p;
@@ -1115,11 +1125,14 @@ const TransactionHistory: React.FC = () => {
     const products = getProducts();
 
     // 1. Revert stock: +newItem qty (barang baru dikembalikan ke stok), -originalItem qty (barang lama diambil kembali)
+    const exchangeNewSku = String(exchange.newItem.sku || '').trim().toUpperCase();
+    const exchangeOriginalSku = String(exchange.originalItem.sku || '').trim().toUpperCase();
     let updatedProducts = products.map(p => {
-      if (p.sku === exchange.newItem.sku && p.stock !== undefined) {
+      const sku = String(p.sku || '').trim().toUpperCase();
+      if (sku === exchangeNewSku && p.stock !== undefined) {
         return { ...p, stock: p.stock + exchange.newItem.quantity };
       }
-      if (p.sku === exchange.originalItem.sku && p.stock !== undefined) {
+      if (sku === exchangeOriginalSku && p.stock !== undefined) {
         return { ...p, stock: p.stock - exchange.originalItem.quantity };
       }
       return p;
@@ -1166,7 +1179,8 @@ const TransactionHistory: React.FC = () => {
         let newItems = [...t.items];
 
         // Add back originalItem qty
-        const oldItemIndex = newItems.findIndex(it => it.sku === exchange.originalItem.sku);
+        const originalExchangeSku = String(exchange.originalItem.sku || '').trim().toUpperCase();
+        const oldItemIndex = newItems.findIndex(it => String(it.sku || '').trim().toUpperCase() === originalExchangeSku);
         if (oldItemIndex >= 0) {
           newItems[oldItemIndex] = {
             ...newItems[oldItemIndex],
@@ -1208,9 +1222,11 @@ const TransactionHistory: React.FC = () => {
   const handleDeleteRefund = (refund: RefundRecord) => {
     const products = getProducts();
 
-    // Restore stock: subtract the refunded quantity (because refund added it back)
+    // Restore stock: subtract the refunded quantity (because refund added it back).
+    // Negative stock is valid and is intentionally not clamped.
+    const refundSku = String(refund.item.sku || '').trim().toUpperCase();
     const updatedProducts = products.map(p => {
-      if (p.sku === refund.item.sku && p.stock !== undefined) {
+      if (String(p.sku || '').trim().toUpperCase() === refundSku && p.stock !== undefined) {
         return { ...p, stock: p.stock - refund.item.quantity };
       }
       return p;
@@ -1218,7 +1234,7 @@ const TransactionHistory: React.FC = () => {
     setProducts(updatedProducts);
     window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
     // ★ Push stock to Sheet (bidirectional sync)
-    pushStockToSheet([{ sku: refund.item.sku, stock: updatedProducts.find((p: any) => p.sku === refund.item.sku)?.stock ?? 0 }]);
+    pushStockToSheet([{ sku: refund.item.sku, stock: updatedProducts.find((p: any) => String(p.sku || '').trim().toUpperCase() === refundSku)?.stock ?? 0 }]);
 
     // Delete the refund record
     deleteRefund(refund.id);

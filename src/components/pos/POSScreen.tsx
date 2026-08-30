@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency, getStoreName, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
 import { getProducts as getCachedProducts, setProducts as setCachedProducts, pushStockToSheet } from "@/lib/productCache";
 import { Button } from "@/components/ui/button";
@@ -41,7 +41,6 @@ import { EscPos } from '@tillpos/xml-escpos-helper';
 import html2canvas from 'html2canvas';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { BarcodeFormat, DecodeHintType } from '@zxing/library';
-import { DUMMY_PRODUCTS } from "@/lib/dummyData";
 import { usePosStore } from "@/store/usePosStore";
 import { useToast } from "@/components/ui/use-toast";
 import { completeTransactionUtil, generateTextReceipt, generateReceiptHtml } from "@/lib/transactions";
@@ -182,14 +181,9 @@ const POSScreen = () => {
   const [products, setProducts] = useState<Product[]>([]);
 
   useEffect(() => {
-    // Load products from localStorage or use default data if empty
+    // An empty cache is valid (for example after deleting all products).
     const storedProducts = getCachedProducts() as Product[];
-    if (storedProducts.length === 0) {
-      setCachedProducts(DUMMY_PRODUCTS);
-      setProducts(DUMMY_PRODUCTS);
-    } else {
-      setProducts(storedProducts);
-    }
+    setProducts(storedProducts);
 
     // Listen for external products updates (e.g., after transaction or product edits)
     const onProductsUpdate = (e: any) => {
@@ -386,10 +380,11 @@ const POSScreen = () => {
 
     // ★ Push stock changes to Google Sheet (bidirectional sync)
     console.log('[StockSync] Cart items:', cart.map(i => ({ sku: i.sku, type: i.type, qty: i.quantity })));
+    const productsBySku = new Map(updatedProducts.map((p: any) => [String(p.sku ?? '').trim().toUpperCase(), p]));
     const stockUpdates = cart
       .filter(i => i.sku && i.sku !== '-')
       .map(cartItem => {
-        const prod = updatedProducts.find((p: any) => p.sku === cartItem.sku);
+        const prod = productsBySku.get(String(cartItem.sku).trim().toUpperCase());
         return prod ? { sku: prod.sku, stock: prod.stock ?? 0 } : null;
       })
       .filter(Boolean) as Array<{ sku: string; stock: number }>;

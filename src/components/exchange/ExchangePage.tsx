@@ -161,18 +161,24 @@ const ExchangePage = () => {
             originalPurchaseDate: selectedItem.transaction.date
         });
 
-        // Update stock (return original, deduct new)
+        // Update stock (return original, deduct new); negative stock is valid.
         const products = getProducts() as Product[];
+        const originalSku = originalItem.sku.trim().toUpperCase();
+        const newSku = newItem.sku.trim().toUpperCase();
         const updatedProducts = products.map(p => {
-            if (p.sku === originalItem.sku && p.stock !== undefined) {
+            const sku = String(p.sku || '').trim().toUpperCase();
+            if (sku === originalSku && p.stock !== undefined) {
                 return { ...p, stock: p.stock + exchangeQty };
             }
-            if (p.sku === newItem.sku && p.stock !== undefined) {
+            if (sku === newSku && p.stock !== undefined) {
                 return { ...p, stock: p.stock - exchangeQty };
             }
             return p;
         });
         setCachedProducts(updatedProducts);
+        try {
+            window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
+        } catch { }
 
         // Create adjustment transaction if there's a price difference
         if (priceDiff !== 0) {

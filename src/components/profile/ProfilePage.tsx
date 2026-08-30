@@ -100,7 +100,6 @@ const ProfilePage = () => {
   const [tempAutoSendTimes, setTempAutoSendTimes] = useState(config.autoSendTimes || "");
   const [uploadingProducts, setUploadingProducts] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
-  const cancelUploadRef = useRef(false);
 
   // Historical sync states
   const [sendingHistorical, setSendingHistorical] = useState(false);
@@ -1051,7 +1050,7 @@ const ProfilePage = () => {
                       <span className="font-bold">UTAMA:</span> {config.gasUrl || '-'}
                     </p>
                     <p className="text-[10px] text-orange-600 font-mono break-all leading-tight">
-                      <span className="font-bold">PRODUK:</span> {config.productGasUrl || '(Sama dg utama)'}
+                      <span className="font-bold">PRODUK:</span> {config.productGasUrl || '- (belum dikonfigurasi)'}
                     </p>
                   </div>
                 </div>
@@ -1279,7 +1278,7 @@ const ProfilePage = () => {
             <div className="space-y-2">
               <label className="text-sm font-bold flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                URL Google Apps Script (GAS)
+                URL GAS Laporan & Transaksi
               </label>
               <div className="flex gap-2">
                 <Input
@@ -1317,13 +1316,13 @@ const ProfilePage = () => {
                   Cek
                 </Button>
               </div>
-              <p className="text-[10px] text-muted-foreground">URL yang didapat setelah Deploy Script di Google Sheets.</p>
+              <p className="text-[10px] text-muted-foreground">URL deployment dari gas-report-transactions.gs untuk laporan penjualan dan rekap.</p>
             </div>
 
             <div className="space-y-2">
               <label className="text-sm font-bold flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-orange-500" />
-                URL Spreadsheet Database Produk (Berbeda)
+                URL GAS Database Produk
               </label>
               <div className="flex gap-2">
                 <Input
@@ -1351,7 +1350,7 @@ const ProfilePage = () => {
                     try {
                       // Mengirim perintah untuk setup sheet & header secara otomatis
                       await fetch(tempProductGasUrl + "?action=setupProductSheet", { method: "GET", mode: "no-cors" });
-                      alert("✅ Koneksi Berhasil!\n\nSistem telah otomatis membuatkan Sheet 'Produk' dan menulis Header di Spreadsheet Anda.\n\nSilakan cek Spreadsheet Database Produk Anda!");
+                      alert("✅ Database Produk Berhasil Disiapkan!\n\nSistem telah meminta script membuat sheet:\n• BA\n• BG\n• BK\n• KG\n• TL\n• ALL PRODUK\n• MASTER\n\nSilakan cek Spreadsheet Database Produk Anda. Jika belum berubah, pastikan URL ini adalah deployment gas-product-database.gs dan cek menu Executions di Apps Script.");
                     } catch (e) {
                       alert("❌ Gagal mengakses server Google.");
                     }
@@ -1360,7 +1359,7 @@ const ProfilePage = () => {
                   Cek
                 </Button>
               </div>
-              <p className="text-[10px] text-muted-foreground">Kosongkan jika sama dengan URL utama di atas.</p>
+              <p className="text-[10px] text-muted-foreground">Gunakan URL deployment dari gas-product-database.gs. Jangan dikosongkan agar sinkronisasi produk memakai database kategori yang benar.</p>
 
               {/* Tombol Upload Semua Produk ke Sheet */}
               <Button
@@ -1371,9 +1370,9 @@ const ProfilePage = () => {
                 onClick={async () => {
                   // Gunakan config yg sudah tersimpan, BUKAN temp input dialog
                   const currentConfig = getConfig();
-                  const targetUrl = (currentConfig.productGasUrl || currentConfig.gasUrl || "").trim();
+                  const targetUrl = currentConfig.productGasUrl.trim();
                   if (!targetUrl) {
-                    return alert("❌ URL belum dikonfigurasi!\n\nSilakan isi URL GAS (Utama atau Produk) lalu klik SIMPAN terlebih dahulu.");
+                    return alert("❌ URL GAS Database Produk belum dikonfigurasi!\n\nIsi URL GAS Database Produk lalu klik SIMPAN terlebih dahulu.");
                   }
 
                   // Ambil data produk dari cache
@@ -1398,40 +1397,54 @@ const ProfilePage = () => {
                   try {
                     // Kirim semua produk dalam 1x request (BULK)
                     const allProducts = products.map(p => ({
-                      kode: (p.sku || p.id || "").toUpperCase(),
+                      kode: (p.sku || p.id || "").trim().toUpperCase(),
                       nama: p.name,
-                      hargaBeli: p.purchasePrice || 0,
-                      hargaJual: p.price,
-                      stok: p.stock || 0,
+                      hargaBeli: Number(p.purchasePrice) || 0,
+                      hargaJual: Number(p.price) || 0,
+                      // Stok boleh negatif; jangan gunakan Math.max(..., 0).
+                      stok: Number(p.stock) || 0,
                     }));
+
+                    const invalidProducts = allProducts.filter(p =>
+                      !p.kode || p.kode === '-' || !p.nama ||
+                      p.hargaBeli < 0 || p.hargaJual < 0 || !Number.isFinite(p.stok)
+                    );
+                    if (invalidProducts.length > 0) {
+                      throw new Error(`${invalidProducts.length} produk memiliki KODE/nama kosong, harga tidak valid, atau stok bukan angka.`);
+                    }
+                    const uploadSkus = new Set<string>();
+                    for (const product of allProducts) {
+                      if (uploadSkus.has(product.kode)) {
+                        throw new Error(`SKU duplikat: ${product.kode}`);
+                      }
+                      uploadSkus.add(product.kode);
+                    }
 
                     const response = await fetch(targetUrl, {
                       method: "POST",
-                      mode: "no-cors",
-                      headers: { "Content-Type": "application/json" },
+                      // GAS product endpoint menerima simple request agar response bisa dibaca.
+                      headers: { "Content-Type": "text/plain;charset=utf-8" },
                       body: JSON.stringify({
                         action: "bulkUpdateProducts",
-                        secretKey: "zaky12345",
                         products: allProducts,
                       }),
                     });
 
-                    // Dengan mode no-cors, response.type = "opaque" dan statusnya selalu 0
-                    // Tapi jika fetch sendiri berhasil (tidak throw), berarti request terkirim ke server
-                    if (response.type === "opaque" || response.ok) {
-                      alert(
-                        `✅ Upload Terkirim!\n\n` +
-                        `${products.length} produk telah dikirim ke Google Sheet.\n\n` +
-                        `📋 Silakan cek Spreadsheet Database Produk Anda\nuntuk memastikan data sudah masuk.\n\n` +
-                        `💡 Jika data tidak muncul, pastikan:\n` +
-                        `1. URL GAS sudah benar (Produk / Utama)\n` +
-                        `2. GAS sudah di-deploy ulang setelah update script`
-                      );
-                    } else {
-                      alert(`❌ Server menolak request.\n\nStatus: ${response.status}\nCoba deploy ulang GAS Anda.`);
+                    if (!response.ok) {
+                      throw new Error(`Server mengembalikan status ${response.status}`);
                     }
+                    const result = await response.json();
+                    if (result.success !== true) {
+                      throw new Error(result.error || "Server menolak upload");
+                    }
+
+                    alert(
+                      `✅ Upload Berhasil!\n\n` +
+                      `${result.total || products.length} produk diproses oleh Google Sheet.\n` +
+                      `Data lokal tetap tersimpan di aplikasi.`
+                    );
                   } catch (err) {
-                    alert(`❌ Gagal mengirim data ke Google Sheet.\n\nKemungkinan penyebab:\n1. Tidak ada koneksi internet\n2. URL GAS salah\n3. GAS belum di-deploy\n\nError: ${err}`);
+                    alert(`❌ Upload gagal. Data lokal tidak diubah.\n\n${err instanceof Error ? err.message : String(err)}\n\nPastikan URL GAS Database Produk mengarah ke gas-product-database.gs dan deployment sudah diperbarui.`);
                   }
 
                   setUploadingProducts(false);

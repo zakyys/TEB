@@ -24,8 +24,22 @@ const PRODUCT_DB_NAME = 'pos_products_db';
 const PRODUCT_DB_VERSION = 1;
 const PRODUCT_STORE = 'products';
 const PRODUCT_BULK_KEY = '__all_products__'; // Single key for bulk storage
+const PRODUCTS_LS_KEY = 'PRODUCTS';
 
 let productDB: IDBDatabase | null = null;
+let pendingProductWrite: Promise<boolean> = Promise.resolve(true);
+
+const persistProductsToLocalStorage = (products: any[]): boolean => {
+    try {
+        // Keep an explicit [] snapshot so a deliberate delete-all is not
+        // confused with "no snapshot" during the next app startup.
+        localStorage.setItem(PRODUCTS_LS_KEY, JSON.stringify(products));
+        return true;
+    } catch (err) {
+        console.error('[ProductCache] localStorage fallback failed:', err);
+        return false;
+    }
+};
 
 const openProductDB = (): Promise<IDBDatabase> => {
     return new Promise((resolve, reject) => {
@@ -83,15 +97,24 @@ const readProductsFromDB = async (): Promise<any[] | null> => {
 const writeProductsToDB = async (products: any[]): Promise<boolean> => {
     try {
         const db = await openProductDB();
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
             const tx = db.transaction(PRODUCT_STORE, 'readwrite');
             const store = tx.objectStore(PRODUCT_STORE);
             const request = store.put(products, PRODUCT_BULK_KEY);
+            let requestFailed = false;
 
-            request.onsuccess = () => resolve(true);
             request.onerror = () => {
+                requestFailed = true;
                 console.error('[ProductCache] Failed to write to IndexedDB:', request.error);
-                reject(request.error);
+            };
+            tx.oncomplete = () => resolve(!requestFailed);
+            tx.onerror = () => {
+                console.error('[ProductCache] IndexedDB transaction failed:', tx.error);
+                resolve(false);
+            };
+            tx.onabort = () => {
+                console.error('[ProductCache] IndexedDB transaction aborted:', tx.error);
+                resolve(false);
             };
         });
     } catch (err) {
@@ -114,15 +137,18 @@ export async function initProductCache(): Promise<any[]> {
     try {
         // Try IndexedDB first
         const fromDB = await readProductsFromDB();
-        if (fromDB && Array.isArray(fromDB) && fromDB.length > 0) {
+        // A stored empty array is valid data (for example after "Hapus Semua").
+        // Do not fall back to a stale localStorage snapshot in that case.
+        if (Array.isArray(fromDB)) {
             productCache = fromDB;
             isInitialized = true;
+            persistProductsToLocalStorage(fromDB);
             console.log(`[ProductCache] Loaded ${fromDB.length} products from IndexedDB`);
             return productCache;
         }
 
-        // Fallback: migrate from localStorage
-        const lsData = localStorage.getItem('PRODUCTS');
+        // Fallback: migrate from localStorage only when IndexedDB has no snapshot.
+        const lsData = localStorage.getItem(PRODUCTS_LS_KEY);
         if (lsData) {
             try {
                 const parsed = JSON.parse(lsData);
@@ -130,11 +156,14 @@ export async function initProductCache(): Promise<any[]> {
                     productCache = parsed;
                     isInitialized = true;
 
-                    // Migrate to IndexedDB in background
+                    // Migrate to IndexedDB in background. Keep the same snapshot
+                    // in localStorage as a recovery copy.
                     writeProductsToDB(parsed).then(success => {
                         if (success) {
                             console.log(`[ProductCache] Migrated ${parsed.length} products from localStorage to IndexedDB`);
-                            // Don't remove from localStorage yet - keep as backup
+                            persistProductsToLocalStorage(parsed);
+                        } else {
+                            persistProductsToLocalStorage(parsed);
                         }
                     });
 
@@ -170,7 +199,7 @@ export function getProducts(): any[] {
     // First call before init completed - cold start fallback
     // This only happens if getProducts() is called before initProductCache() finishes
     try {
-        const lsData = localStorage.getItem('PRODUCTS');
+        const lsData = localStorage.getItem(PRODUCTS_LS_KEY);
         if (lsData) {
             productCache = JSON.parse(lsData);
             return productCache!;
@@ -194,20 +223,25 @@ export function setProducts(products: any[]): void {
     // Update in-memory cache immediately (synchronous)
     productCache = products;
 
+    // Keep a synchronous recovery snapshot. This also records [] deliberately,
+    // so a delete-all survives reload if IndexedDB is unavailable.
+    persistProductsToLocalStorage(products);
+
     // Debounce the IndexedDB write (100ms) to batch rapid updates
     if (writeDebounceTimer) {
         clearTimeout(writeDebounceTimer);
     }
 
     writeDebounceTimer = setTimeout(() => {
-        writeProductsToDB(products).catch(err => {
-            console.error('[ProductCache] Background write failed, saving to localStorage:', err);
-            // Fallback: try localStorage
-            try {
-                localStorage.setItem('PRODUCTS', JSON.stringify(products));
-            } catch (lsErr) {
-                console.error('[ProductCache] localStorage fallback also failed:', lsErr);
+        writeDebounceTimer = null;
+        pendingProductWrite = writeProductsToDB(products).then(success => {
+            if (!success) {
+                console.error('[ProductCache] Background write failed; localStorage snapshot retained');
             }
+            return success;
+        }).catch(err => {
+            console.error('[ProductCache] Background write failed:', err);
+            return false;
         });
     }, 100);
 
@@ -225,7 +259,14 @@ export async function flushProductCache(): Promise<void> {
         writeDebounceTimer = null;
     }
     if (productCache) {
-        await writeProductsToDB(productCache);
+        persistProductsToLocalStorage(productCache);
+        // Wait for any write already in flight, then durably write the latest
+        // in-memory snapshot as well.
+        await pendingProductWrite;
+        const success = await writeProductsToDB(productCache);
+        if (!success) {
+            console.warn('[ProductCache] Flush failed; localStorage snapshot retained');
+        }
     }
 }
 
@@ -325,8 +366,9 @@ export function initStockSync(): void {
  */
 export function pushStockToSheet(updates: Array<{ sku: string; stock: number }>): void {
     for (const u of updates) {
-        if (u.sku && u.sku !== '-') {
-            pendingStockUpdates.set(u.sku, u.stock);
+        const sku = String(u.sku ?? '').trim().toUpperCase();
+        if (sku && sku !== '-') {
+            pendingStockUpdates.set(sku, u.stock);
         }
     }
 
@@ -361,56 +403,51 @@ async function _flushStockToSheet(): Promise<void> {
     try {
         let gasUrl = '';
         try {
-            const raw = localStorage.getItem('pos_product_gas_url') || localStorage.getItem('pos_gas_url');
+            // Product stock must never fall back to the report deployment.
+            const raw = localStorage.getItem('pos_product_gas_url');
             if (raw) gasUrl = JSON.parse(raw);
         } catch { /* fallback */ }
 
         if (!gasUrl) {
-            console.log('[StockSync] No GAS URL configured, skipping push');
+            console.log('[StockSync] No product GAS URL configured; keeping updates queued');
+            for (const u of updates) pendingStockUpdates.set(u.kode, u.stok);
+            _persistPending();
             return;
         }
 
         console.log(`[StockSync] Pushing ${updates.length} stock updates...`);
         const products = productCache || [];
-        let successCount = 0;
+        const productsBySku = new Map(products.map((p: any) => [String(p.sku ?? '').trim().toUpperCase(), p]));
+        const normalizedUpdates = updates.map(u => ({
+            kode: String(u.kode).trim().toUpperCase(),
+            stok: u.stok,
+        }));
+        const stockUpdates = normalizedUpdates.filter(u => productsBySku.has(u.kode));
 
-        for (const u of updates) {
-            const product = products.find((p: any) => p.sku === u.kode);
-            if (!product) {
-                console.log(`[StockSync] Product ${u.kode} not found in cache, skipping`);
-                continue;
-            }
-
-            try {
-                await fetch(gasUrl, {
-                    method: "POST",
-                    mode: "no-cors",
-                    headers: { "Content-Type": "text/plain;charset=utf-8" },
-                    body: JSON.stringify({
-                        action: "updateProductActive",
-                        product: {
-                            kode: product.sku,
-                            nama: product.name,
-                            hargaBeli: product.purchasePrice || 0,
-                            hargaJual: product.price || 0,
-                            stok: u.stok
-                        }
-                    })
-                });
-                successCount++;
-                console.log(`[StockSync] ✓ ${u.kode} → stok: ${u.stok}`);
-            } catch (err) {
-                console.error(`[StockSync] ✗ Failed ${u.kode}:`, err);
-                pendingStockUpdates.set(u.kode, u.stok);
-            }
+        const missing = normalizedUpdates.filter(u => !productsBySku.has(u.kode));
+        for (const u of missing) pendingStockUpdates.set(u.kode, u.stok);
+        if (stockUpdates.length === 0) {
+            _persistPending();
+            return;
         }
 
-        // Persist any remaining failures
+        const response = await fetch(gasUrl, {
+            method: "POST",
+            mode: "no-cors",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify({
+                action: "batchUpdateStock",
+                updates: stockUpdates,
+            }),
+        });
+
+        // no-cors responses are opaque, so this only confirms request delivery;
+        // failed network requests remain queued for retry.
+        if (!response || (response.type !== 'opaque' && !response.ok)) {
+            throw new Error(`Stock sync ditolak (status ${response?.status ?? 'unknown'})`);
+        }
+        console.log(`[StockSync] ✓ Batch request sent for ${stockUpdates.length} stock updates`);
         _persistPending();
-
-        if (successCount > 0) {
-            console.log(`[StockSync] ✓ ${successCount}/${updates.length} pushed successfully`);
-        }
     } catch (err) {
         console.error('[StockSync] Failed:', err);
         for (const u of updates) {

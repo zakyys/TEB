@@ -1,115 +1,268 @@
-# 📋 Cara Deploy Google Apps Script untuk Rekap Barang Terlaris & Jumlah Tamu
+# Panduan Setup Google Apps Script GoldenPOS
 
-## ⚠️ MASALAH YANG DITEMUKAN
+Aplikasi ini memakai **dua deployment Google Apps Script yang terpisah**. Jangan menempelkan kedua script ke satu project Apps Script karena keduanya memiliki fungsi `doGet()` dan `doPost()` sendiri.
 
-Frontend sudah bekerja dengan baik dan mengirim data, tetapi **Google Apps Script tidak menulis data** ke sheet. Ini karena:
-1. Script mungkin belum dideploy ulang dengan kode terbaru
-2. URL yang digunakan mungkin salah atau mengarah ke deployment lama
+## Ringkasan file
 
-## ✅ SOLUSI: Deploy Ulang Google Apps Script
+| Kebutuhan | File yang disalin ke Apps Script | URL di aplikasi |
+|---|---|---|
+| Laporan penjualan, rekap bulanan, data tamu, refund, tukar barang, Telegram, backup | `gas-report-transactions.gs` | **URL Google Apps Script (GAS)** |
+| Database produk, kategori, stok, `ALL PRODUK`, bulk upload, sinkronisasi stok | `gas-product-database.gs` | **URL Spreadsheet Database Produk** |
 
-### Langkah 1: Buka Google Apps Script Editor
+File GAS lama sudah dihapus dari repository agar tidak tertukar.
 
-1. Buka Google Sheets yang ingin Anda gunakan untuk menyimpan data
-2. Klik **Extensions** → **Apps Script**
-3. Hapus semua kode yang ada di editor
+---
 
-### Langkah 2: Copy Script Baru
+# A. Setup URL utama — laporan/transaksi
 
-1. Buka file `google-apps-script.js` di folder project ini
-2. Copy **SEMUA ISI** file tersebut
-3. Paste ke Apps Script Editor
+Gunakan spreadsheet yang ingin menyimpan laporan penjualan.
 
-### Langkah 3: Deploy Web App
+## 1. Pasang script laporan
 
-1. Klik tombol **Deploy** → **New deployment**
-2. Klik icon **gear/roda gigi** di sebelah "Select type"
-3. Pilih **Web app**
-4. Isi konfigurasi:
-   - **Description**: "POS Data API v2" (atau versi lainnya)
-   - **Execute as**: "Me" (email Anda)
-   - **Who has access**: **"Anyone"** ⚠️ PENTING!
-5. Klik **Deploy**
-6. Authorize aplikasi jika diminta
-7. **COPY URL** yang diberikan (format: `https://script.google.com/macros/s/AKfycby...`)
+1. Buka Google Spreadsheet laporan.
+2. Pilih **Extensions → Apps Script**.
+3. Hapus kode lama di editor.
+4. Buka file `gas-report-transactions.gs` dari repository ini.
+5. Copy **seluruh isi file**.
+6. Paste ke Apps Script Editor.
+7. Klik **Save**.
 
-### Langkah 4: Update URL di Aplikasi
+## 2. Deploy sebagai Web App
 
-Ada **2 URL berbeda** yang perlu diupdate:
+1. Klik **Deploy → New deployment**.
+2. Pilih tipe **Web app**.
+3. Atur:
+   - **Execute as**: `Me`
+   - **Who has access**: `Anyone`
+4. Klik **Deploy**.
+5. Berikan izin yang diminta Google.
+6. Copy URL yang berakhiran `/exec`.
 
-#### URL 1: Penjualan Harian (Sudah Ada)
-```
-https://script.google.com/macros/s/AKfycbykzjXtQ4nDX0d9cxLRbW9Cl3jJU1ywIBQxc90nYHlECnD3wzQRV-XKJiY00Hj4yDcIIA/exec
-```
+## 3. Masukkan ke aplikasi
 
-#### URL 2: Rekap Barang Terlaris & Tamu (Perlu Diupdate)
-```
-https://script.google.com/macros/s/AKfycby_OOLN6N3TqYpntzorY7rftDcs4i3p3rCkQ3p8IqVi_rYuqIVXxjzeMYAtwGeRlD-w/exec
-```
+Buka:
 
-⚠️ **REKOMENDASI**: Gunakan **URL yang sama** untuk kedua fitur (dari deployment baru)
-
-### Langkah 5: Test Ulang
-
-1. Buka aplikasi POS di browser
-2. Klik tombol **"Rekap Barang Terlaris"**
-3. Tunggu popup "Berhasil!"
-4. Cek Google Sheets Anda:
-   - Harus ada sheet baru dengan nama bulan (misal: "Des 2025")
-   - Sheet berisi:
-     - ✅ Ranking barang paling laku
-     - ✅ Data tamu harian (<12 dan >12) per tanggal
-     - ✅ Total keseluruhan
-
-## 📝 Catatan Penting
-
-### Data yang Dikirim:
-- **Barang Terlaris**: Semua produk yang terjual bulan ini, diurutkan berdasarkan quantity
-- **Data Tamu**: Data harian jumlah tamu <12 tahun dan >12 tahun untuk setiap hari dalam bulan berjalan
-
-### Format Sheet yang Dibuat:
-```
-📊 BARANG PALING LAKU BULAN INI - Des 2025
-Terakhir Update: 27/12/2025 09:00:00
-
-Rank | KODE    | Nama Produk | Qty Terjual | Total Penjualan
-1    | BA-0133 | ANTING 2 ABS | 15         | 112500
-2    | BA-0228 | ABRASIVE ... | 10         | 250000
-...
-
-GRAND TOTAL: ...
-
-════════════════════════════════════════════════════════════
-👥 DATA TAMU HARIAN BULAN INI
-
-Tanggal          | <12 Tahun | >12 Tahun | Total
-27 Desember 2025 | 5         | 8         | 13
-26 Desember 2025 | 3         | 6         | 9
-...
-
-TOTAL BULAN INI: 25 | 45 | 70
+```text
+Profile → Koneksi Multi-Toko → Ubah Koneksi Toko
 ```
 
-## 🔧 Troubleshooting
+Masukkan URL tersebut ke:
 
-### "Berhasil" tapi data tidak muncul di Sheet?
-1. Pastikan URL di kode sudah benar (lihat Langkah 4)
-2. Pastikan deployment setting "Who has access" = **"Anyone"**
-3. Deploy ulang dengan versi baru
-4. Clear cache browser dan refresh aplikasi POS
+```text
+URL Google Apps Script (GAS)
+```
 
-### Error saat authorize?
-1. Gunakan akun Google yang memiliki akses ke Sheet
-2. Berikan semua permission yang diminta
-3. Jika ditolak, coba gunakan mode incognito
+URL ini dipakai untuk:
 
-### Sheet tidak terbuat otomatis?
-- Pastikan Apps Script memiliki permission untuk membuat sheet baru
-- Cek apakah ada error di Apps Script Execution log (View → Executions)
+- laporan penjualan harian;
+- rekap bulanan;
+- data tamu;
+- refund dan tukar barang;
+- backup laporan ke Google Drive;
+- notifikasi Telegram.
 
-## 📞 Perlu Bantuan?
+Klik **Simpan** setelah URL diisi.
 
-Jika masih ada masalah setelah mengikuti langkah ini, berikan informasi:
-1. Screenshot error (jika ada)
-2. Browser console log
-3. Apps Script execution log
+---
+
+# B. Setup URL database produk
+
+Gunakan spreadsheet yang ingin menjadi database produk. Sebaiknya pisahkan dari spreadsheet laporan agar data lebih mudah dikelola.
+
+## 1. Pasang script database produk
+
+1. Buka Google Spreadsheet database produk.
+2. Pilih **Extensions → Apps Script**.
+3. Hapus kode lama di editor.
+4. Buka file `gas-product-database.gs` dari repository ini.
+5. Copy **seluruh isi file**.
+6. Paste ke Apps Script Editor.
+7. Klik **Save**.
+
+## 2. Deploy sebagai Web App
+
+1. Klik **Deploy → New deployment**.
+2. Pilih tipe **Web app**.
+3. Atur:
+   - **Execute as**: `Me`
+   - **Who has access**: `Anyone`
+4. Klik **Deploy**.
+5. Berikan izin yang diminta Google.
+6. Copy URL yang berakhiran `/exec`.
+
+## 3. Masukkan ke aplikasi
+
+Di halaman pengaturan yang sama, masukkan URL ke:
+
+```text
+URL Spreadsheet Database Produk (Berbeda)
+```
+
+Klik **Simpan**.
+
+## 4. Buat format sheet dari aplikasi
+
+Klik tombol **Cek** di sebelah URL database produk.
+
+Tombol ini akan menjalankan setup otomatis dan membuat:
+
+```text
+BA
+BG
+BK
+KG
+TL
+ALL PRODUK
+MASTER
+```
+
+Struktur sheet produk:
+
+- Baris 1: waktu upload terakhir
+- Baris 2: waktu sinkronisasi kasir terakhir
+- Baris 3: header kolom
+- Baris 4 dan seterusnya: data produk
+
+Jangan mengedit sheet `ALL PRODUK` secara manual. Sheet tersebut dibuat otomatis dari sheet kategori.
+
+## 5. Pasang trigger perubahan sheet
+
+Di spreadsheet database produk, buka menu custom:
+
+```text
+📋 MASTER → ⚙️ Setup Auto-Sync (1x saja)
+```
+
+Lakukan satu kali saja. Trigger ini membantu memperbarui `ALL PRODUK` ketika baris di sheet kategori dihapus atau ditambahkan.
+
+---
+
+# C. Aturan penggunaan sehari-hari
+
+## Menambah atau mengedit produk
+
+Gunakan aplikasi POS atau sheet kategori:
+
+```text
+BA / BG / BK / KG / TL
+```
+
+Setelah perubahan dari sheet, jalankan **Sync Sheet** di aplikasi.
+
+## Upload semua produk dari aplikasi
+
+Gunakan tombol:
+
+```text
+Profile → Koneksi Multi-Toko → Upload Semua Produk ke Sheet
+```
+
+Fitur ini menulis ulang data produk di sheet kategori. Pastikan backup sudah tersedia sebelum menggunakannya.
+
+## Sinkronisasi produk ke aplikasi
+
+Gunakan:
+
+```text
+Products → Sync Sheet
+```
+
+Aplikasi akan membaca produk dari sheet kategori database produk.
+
+## Laporan penjualan
+
+Gunakan URL utama untuk laporan. Aplikasi akan membuat/memperbarui sheet seperti:
+
+```text
+Harian <Bulan> <Tahun>
+Recap <Bulan> <Tahun>
+```
+
+---
+
+# D. Cara mengecek URL secara manual
+
+## Cek URL laporan
+
+Buka URL utama di browser. Response teks:
+
+```text
+GoldenPOS API OK - Ready to receive requests
+```
+
+menunjukkan endpoint dapat dijangkau.
+
+## Cek URL database produk
+
+Tambahkan parameter berikut pada URL database produk:
+
+```text
+?action=getProducts
+```
+
+Contoh:
+
+```text
+https://script.google.com/macros/s/ID_DEPLOYMENT/exec?action=getProducts
+```
+
+Response database produk yang benar berbentuk JSON, misalnya:
+
+```json
+{
+  "success": true,
+  "products": [],
+  "total": 0
+}
+```
+
+Untuk membuat format sheet dari browser, gunakan:
+
+```text
+?action=setupProductSheet
+```
+
+---
+
+# E. Troubleshooting
+
+## Tombol Cek tidak membuat sheet
+
+Periksa hal berikut:
+
+1. Yang ditekan adalah tombol **Cek** di sebelah **URL Spreadsheet Database Produk**, bukan tombol URL utama.
+2. URL tersebut berasal dari deployment file `gas-product-database.gs`.
+3. URL berakhiran `/exec`, bukan URL editor Apps Script.
+4. Deployment memakai **Execute as: Me**.
+5. Akses disetel ke **Anyone**.
+6. Script sudah disimpan dan deployment dibuat ulang setelah perubahan kode.
+7. Google sudah meminta dan menerima otorisasi script.
+
+## Response mengatakan `Sheet 'Produk' tidak ditemukan`
+
+URL masih mengarah ke script lama. Database produk terbaru tidak memakai satu sheet `Produk`; database ini memakai:
+
+```text
+BA, BG, BK, KG, TL, ALL PRODUK, MASTER
+```
+
+Deploy ulang menggunakan `gas-product-database.gs`.
+
+## Produk tidak muncul saat Sync Sheet
+
+1. Pastikan URL database produk sudah disimpan.
+2. Pastikan sheet kategori berisi data mulai dari baris 4.
+3. Pastikan KODE produk memiliki prefix yang sesuai: `BA`, `BG`, `BK`, `KG`, atau `TL`.
+4. Pastikan Apps Script database produk sudah dideploy ulang.
+5. Cek **Executions** di Apps Script untuk melihat error.
+
+## Penting tentang dua script
+
+Jangan menempelkan kedua file berikut dalam satu Apps Script project:
+
+```text
+gas-report-transactions.gs
+gas-product-database.gs
+```
+
+Keduanya memiliki router `doGet()` dan `doPost()` sendiri. Deploy sebagai dua project/URL terpisah.
