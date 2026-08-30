@@ -232,7 +232,7 @@ function doPost(e) {
         }
 
         // =====================================================
-        // 4. BULK UPLOAD - AUTO REPLACE
+        // 4. BULK UPLOAD - TULIS KE MASTER, lalu proses otomatis onEdit
         // =====================================================
         if (action === "bulkUpdateProducts") {
             var allProducts = data.products || [];
@@ -240,10 +240,12 @@ function doPost(e) {
             if (allProducts.length > 5000) return createJsonResponse({ success: false, error: "Maksimal 5000 produk per upload" });
 
             var seenCodes = {};
+            var masterRows = [];
             for (var productIndex = 0; productIndex < allProducts.length; productIndex++) {
                 var product = allProducts[productIndex];
                 var code = String(product.kode || '').trim().toUpperCase();
-                if (!code || !String(product.nama || '').trim()) {
+                var name = String(product.nama || '').trim();
+                if (!code || !name) {
                     return createJsonResponse({ success: false, error: "Setiap produk wajib memiliki KODE dan nama" });
                 }
                 if (seenCodes[code]) {
@@ -255,78 +257,33 @@ function doPost(e) {
                     !isFinite(Number(product.stok))) {
                     return createJsonResponse({ success: false, error: "Harga harus valid dan stok harus berupa angka (stok boleh negatif)" });
                 }
+                masterRows.push([code, name, Number(product.hargaBeli), Number(product.hargaJual), Number(product.stok)]);
             }
 
-            // Kelompokkan produk berdasarkan prefix kode
-            var grouped = {};
-            CATEGORY_SHEETS.forEach(function (name) { grouped[name] = []; });
+            var masterSheet = ss.getSheetByName(PASTE_SHEET);
+            if (!masterSheet) masterSheet = ss.insertSheet(PASTE_SHEET);
+            formatPasteSheet(masterSheet);
+            if (masterSheet.getLastRow() >= PASTE_DATA_ROW) {
+                masterSheet.getRange(PASTE_DATA_ROW, 1, masterSheet.getLastRow() - PASTE_DATA_ROW + 1, 5).clearContent();
+            }
+            var masterMaxRows = masterSheet.getMaxRows();
+            var masterNeededRows = PASTE_DATA_ROW + masterRows.length - 1;
+            if (masterNeededRows > masterMaxRows) {
+                masterSheet.insertRowsAfter(masterMaxRows, masterNeededRows - masterMaxRows + 50);
+            }
+            masterSheet.getRange(PASTE_DATA_ROW, 1, masterRows.length, 5).setValues(masterRows);
 
-            allProducts.forEach(function (p) {
-                var sheetName = getSheetNameFromCode(p.kode);
-                grouped[sheetName].push(p);
-            });
-
-            // AUTO REPLACE per sheet kategori
-            CATEGORY_SHEETS.forEach(function (name) {
-                var sheet = ss.getSheetByName(name);
-                if (!sheet) sheet = ss.insertSheet(name);
-
-                // Selalu format ulang header (Row 1-3)
-                formatSheetHeaders(sheet);
-
-                // Hapus data lama (dari row 4 ke bawah)
-                if (sheet.getLastRow() >= DATA_START_ROW) {
-                    sheet.getRange(DATA_START_ROW, 1, sheet.getLastRow() - DATA_START_ROW + 1, 6).clearContent();
-                }
-
-                var prods = grouped[name];
-                if (prods.length === 0) return;
-
-                // Pastikan baris cukup
-                var maxRows = sheet.getMaxRows();
-                var neededRows = prods.length + DATA_START_ROW;
-                if (neededRows > maxRows) {
-                    sheet.insertRowsAfter(maxRows, neededRows - maxRows + 50);
-                }
-
-                // Tulis data (kolom A-E)
-                var rowData = prods.map(function (p) {
-                    return [String(p.kode).toUpperCase(), p.nama, p.hargaBeli, p.hargaJual, p.stok];
-                });
-                sheet.getRange(DATA_START_ROW, 1, rowData.length, 5).setValues(rowData);
-
-                // Formula Gross Margin (kolom F)
-                var formulas = [];
-                for (var j = 0; j < rowData.length; j++) {
-                    var r = DATA_START_ROW + j;
-                    formulas.push(["=IF(D" + r + ">0;(D" + r + "-C" + r + ")/D" + r + ";0)"]);
-                }
-                sheet.getRange(DATA_START_ROW, 6, formulas.length, 1).setFormulas(formulas);
-
-                // Format angka
-                sheet.getRange(DATA_START_ROW, 3, rowData.length, 1).setNumberFormat("#,##0");
-                sheet.getRange(DATA_START_ROW, 4, rowData.length, 1).setNumberFormat("#,##0");
-                sheet.getRange(DATA_START_ROW, 5, rowData.length, 1).setNumberFormat("0");
-                sheet.getRange(DATA_START_ROW, 6, rowData.length, 1).setNumberFormat("0.0%");
-
-                sheet.autoResizeColumns(1, 6);
-            });
-
-            // Rebuild ALL PRODUK
-            rebuildAllSheet(ss);
-
-            // Update timestamp Upload
-            var timestamp = getTimestampText();
-            updateTimestamp(ss, "upload", timestamp);
-
-            var stats = {};
-            CATEGORY_SHEETS.forEach(function (name) { stats[name] = grouped[name].length; });
+            // onEdit tidak jalan otomatis saat script menulis cell, jadi panggil
+            // processor yang sama seperti paste manual secara langsung.
+            var processResult = processMasterRows(ss, masterSheet);
+            if (!processResult.success) {
+                return createJsonResponse({ success: false, error: processResult.error });
+            }
 
             return createJsonResponse({
                 success: true,
-                message: "Bulk upload selesai!",
-                total: allProducts.length,
-                perSheet: stats
+                message: "Upload ditulis ke MASTER dan diproses otomatis!",
+                total: processResult.count
             });
         }
 
@@ -627,88 +584,15 @@ function onEdit(e) {
         var lastRow = sheet.getLastRow();
         if (lastRow < PASTE_DATA_ROW) return; // Belum ada data
 
-        // Baca semua data yang di-paste
-        var pasteData = sheet.getRange(PASTE_DATA_ROW, 1, lastRow - PASTE_DATA_ROW + 1, 5).getValues();
-        var validData = pasteData.filter(function (row) {
-            return row[0] && String(row[0]).trim() !== "" && String(row[0]).toUpperCase() !== "KODE";
-        });
-
-        if (validData.length === 0) return;
-
-        // Kelompokkan berdasarkan prefix
-        var grouped = {};
-        CATEGORY_SHEETS.forEach(function (name) { grouped[name] = []; });
-
-        validData.forEach(function (row) {
-            var target = getSheetNameFromCode(row[0]);
-            grouped[target].push([
-                String(row[0]).toUpperCase(),
-                row[1],
-                Number(row[2]) || 0,
-                Number(row[3]) || 0,
-                Number(row[4]) || 0
-            ]);
-        });
-
-        // ⚡ BACKUP data lama sebelum replace
-        backupAllData(ss);
-
-        // AUTO REPLACE semua sheet kategori
-        CATEGORY_SHEETS.forEach(function (name) {
-            var catSheet = ss.getSheetByName(name);
-            if (!catSheet) { catSheet = ss.insertSheet(name); }
-            formatSheetHeaders(catSheet);
-
-            // Hapus data lama
-            if (catSheet.getLastRow() >= DATA_START_ROW) {
-                catSheet.getRange(DATA_START_ROW, 1, catSheet.getLastRow() - DATA_START_ROW + 1, 6).clearContent();
-            }
-
-            var prods = grouped[name];
-            if (prods.length === 0) return;
-
-            // Pastikan baris cukup
-            var maxRows = catSheet.getMaxRows();
-            var neededRows = prods.length + DATA_START_ROW;
-            if (neededRows > maxRows) {
-                catSheet.insertRowsAfter(maxRows, neededRows - maxRows + 50);
-            }
-
-            // Tulis data
-            catSheet.getRange(DATA_START_ROW, 1, prods.length, 5).setValues(prods);
-
-            // Formula Gross Margin
-            var formulas = [];
-            for (var j = 0; j < prods.length; j++) {
-                var r = DATA_START_ROW + j;
-                formulas.push(["=IF(D" + r + ">0;(D" + r + "-C" + r + ")/D" + r + ";0)"]);
-            }
-            catSheet.getRange(DATA_START_ROW, 6, formulas.length, 1).setFormulas(formulas);
-
-            // Format angka
-            catSheet.getRange(DATA_START_ROW, 3, prods.length, 1).setNumberFormat("#,##0");
-            catSheet.getRange(DATA_START_ROW, 4, prods.length, 1).setNumberFormat("#,##0");
-            catSheet.getRange(DATA_START_ROW, 5, prods.length, 1).setNumberFormat("0");
-            catSheet.getRange(DATA_START_ROW, 6, prods.length, 1).setNumberFormat("0.0%");
-            catSheet.autoResizeColumns(1, 6);
-        });
-
-        // Rebuild ALL PRODUK
-        rebuildAllSheet(ss);
-
-        // Update timestamp
-        var timestamp = getTimestampText();
-        updateTimestamp(ss, "upload", timestamp);
-
-        // Hapus data dari paste sheet + kembalikan header
-        if (sheet.getLastRow() >= PASTE_DATA_ROW) {
-            sheet.getRange(PASTE_DATA_ROW, 1, sheet.getLastRow() - PASTE_DATA_ROW + 1, sheet.getMaxColumns()).clearContent();
+        var processResult;
+        try {
+            processResult = processMasterRows(ss, sheet);
+        } catch (error) {
+            processResult = { success: false, error: error.toString() };
         }
-        formatPasteSheet(sheet);
-
-        // Update status di paste sheet (Row 1)
-        sheet.getRange(1, 1).setValue("✅ BERHASIL! " + validData.length + " produk didistribusikan ke semua sheet (" + timestamp + ")");
-
+        if (!processResult.success) {
+            sheet.getRange(1, 1).setValue("⚠️ " + processResult.error);
+        }
         return;
     }
 
@@ -773,6 +657,81 @@ function onEdit(e) {
         // Fallback: rebuild untuk memastikan sinkron
         rebuildAllSheet(ss);
     }
+}
+
+// Proses isi MASTER menjadi sheet kategori. Dipakai oleh paste manual dan API upload.
+function processMasterRows(ss, sheet) {
+    var lastRow = sheet.getLastRow();
+    if (lastRow < PASTE_DATA_ROW) return { success: false, count: 0, error: "Tidak ada data MASTER" };
+
+    var pasteData = sheet.getRange(PASTE_DATA_ROW, 1, lastRow - PASTE_DATA_ROW + 1, 5).getValues();
+    var validData = pasteData.filter(function (row) {
+        return row.some(function (cell) { return cell !== null && String(cell).trim() !== ""; });
+    }).filter(function (row) {
+        return String(row[0] || '').trim().toUpperCase() !== "KODE";
+    });
+    if (validData.length === 0) return { success: false, count: 0, error: "Tidak ada data produk di MASTER" };
+    if (validData.length > 5000) return { success: false, count: 0, error: "Maksimal 5000 produk" };
+
+    var seenCodes = {};
+    var grouped = {};
+    CATEGORY_SHEETS.forEach(function (name) { grouped[name] = []; });
+
+    for (var dataIndex = 0; dataIndex < validData.length; dataIndex++) {
+        var row = validData[dataIndex];
+        var masterRowNumber = dataIndex + PASTE_DATA_ROW;
+        var code = String(row[0] || '').trim().toUpperCase();
+        if (!code) return { success: false, count: 0, error: "KODE kosong pada baris MASTER " + masterRowNumber };
+        var name = String(row[1] || '').trim();
+        if (!name) return { success: false, count: 0, error: "Nama kosong pada baris MASTER " + masterRowNumber };
+        if (seenCodes[code]) return { success: false, count: 0, error: "SKU duplikat di MASTER: " + code };
+        seenCodes[code] = true;
+        var hargaBeli = Number(row[2]);
+        var hargaJual = Number(row[3]);
+        var stok = Number(row[4]);
+        if (!isFinite(hargaBeli) || hargaBeli < 0 || !isFinite(hargaJual) || hargaJual < 0 || !isFinite(stok)) {
+            return { success: false, count: 0, error: "Harga harus valid dan stok harus berupa angka pada SKU " + code + " (stok boleh negatif)" };
+        }
+        var target = getSheetNameFromCode(code);
+        grouped[target].push([code, name, hargaBeli, hargaJual, stok]);
+    }
+
+    backupAllData(ss);
+    CATEGORY_SHEETS.forEach(function (name) {
+        var catSheet = ss.getSheetByName(name);
+        if (!catSheet) catSheet = ss.insertSheet(name);
+        formatSheetHeaders(catSheet);
+        if (catSheet.getLastRow() >= DATA_START_ROW) {
+            catSheet.getRange(DATA_START_ROW, 1, catSheet.getLastRow() - DATA_START_ROW + 1, 6).clearContent();
+        }
+        var prods = grouped[name];
+        if (prods.length === 0) return;
+        var neededRows = prods.length + DATA_START_ROW;
+        if (neededRows > catSheet.getMaxRows()) {
+            catSheet.insertRowsAfter(catSheet.getMaxRows(), neededRows - catSheet.getMaxRows() + 50);
+        }
+        catSheet.getRange(DATA_START_ROW, 1, prods.length, 5).setValues(prods);
+        var formulas = [];
+        for (var j = 0; j < prods.length; j++) {
+            var r = DATA_START_ROW + j;
+            formulas.push(["=IF(D" + r + ">0;(D" + r + "-C" + r + ")/D" + r + ";0)"]);
+        }
+        catSheet.getRange(DATA_START_ROW, 6, formulas.length, 1).setFormulas(formulas);
+        catSheet.getRange(DATA_START_ROW, 3, prods.length, 2).setNumberFormat("#,##0");
+        catSheet.getRange(DATA_START_ROW, 5, prods.length, 1).setNumberFormat("0");
+        catSheet.getRange(DATA_START_ROW, 6, prods.length, 1).setNumberFormat("0.0%");
+        catSheet.autoResizeColumns(1, 6);
+    });
+
+    rebuildAllSheet(ss);
+    var timestamp = getTimestampText();
+    updateTimestamp(ss, "upload", timestamp);
+    if (sheet.getLastRow() >= PASTE_DATA_ROW) {
+        sheet.getRange(PASTE_DATA_ROW, 1, sheet.getLastRow() - PASTE_DATA_ROW + 1, sheet.getMaxColumns()).clearContent();
+    }
+    formatPasteSheet(sheet);
+    sheet.getRange(1, 1).setValue("✅ BERHASIL! " + validData.length + " produk didistribusikan ke semua sheet (" + timestamp + ")");
+    return { success: true, count: validData.length };
 }
 
 // Format sheet MASTER

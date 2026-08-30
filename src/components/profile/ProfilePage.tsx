@@ -1440,7 +1440,7 @@ const ProfilePage = () => {
 
                     alert(
                       `✅ Upload Berhasil!\n\n` +
-                      `${result.total || products.length} produk diproses oleh Google Sheet.\n` +
+                      `${result.total || products.length} produk ditulis ke MASTER dan diproses ke sheet kategori.\n` +
                       `Data lokal tetap tersimpan di aplikasi.`
                     );
                   } catch (err) {

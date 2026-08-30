@@ -128,10 +128,12 @@ Respons yang diharapkan:
 
 `GET <productGasUrl>?action=setupProductSheet` membuat/menyiapkan sheet.
 
+Upload massal dari aplikasi mengikuti pola lama: payload ditulis dahulu ke `MASTER` mulai baris 5, lalu diproses otomatis ke sheet kategori dan `ALL PRODUK`; isi `MASTER` dibersihkan setelah berhasil.
+
 ### POST actions
 
 - `updateProductActive` — tambah/edit satu produk.
-- `bulkUpdateProducts` — replace data kategori dari seluruh produk aplikasi.
+- `bulkUpdateProducts` — menulis seluruh produk ke `MASTER` mulai baris 5, lalu menjalankan processor MASTER yang sama seperti paste manual; processor membackup data lama, mengganti sheet kategori, membersihkan area data MASTER setelah berhasil, dan rebuild `ALL PRODUK`.
 - `batchUpdateStock` — update stok beberapa SKU sekaligus.
 
 Sheet database produk:
@@ -139,12 +141,13 @@ Sheet database produk:
 - kategori: `BA`, `BG`, `BK`, `KG`, `TL`;
 - agregat: `ALL PRODUK`;
 - konfigurasi: `MASTER`;
-- data dimulai dari baris 4; kolom utama: KODE, Nama, Harga Beli, Harga Jual, Stok.
+- sheet kategori: data dimulai dari baris 4; kolom utama: KODE, Nama, Harga Beli, Harga Jual, Stok.
+- sheet `MASTER`: baris 1 status, baris 2 header, baris 3 instruksi, baris 4 checkbox Undo, data mulai baris 5.
 
 ### Catatan CORS/no-cors
 
 - GET sync produk harus dapat membaca response JSON dan karena itu memakai request biasa.
-- Upload massal sekarang mengirim `Content-Type: text/plain;charset=utf-8` agar menjadi simple request dan response dapat diverifikasi.
+- Upload massal sekarang mengirim `Content-Type: text/plain;charset=utf-8` agar menjadi simple request dan response dapat diverifikasi; backend menulis payload ke `MASTER` lalu menjalankan processor MASTER yang sama seperti paste manual.
 - Stock sync memakai `no-cors` untuk kompatibilitas GAS dan hanya dapat memastikan request tidak gagal di level jaringan; kegagalan jaringan dimasukkan kembali ke antrean.
 - Jangan menyebut request `no-cors` sebagai bukti server sudah memproses data; read-back manual atau sync ulang diperlukan bila verifikasi penuh dibutuhkan.
 

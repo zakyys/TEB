@@ -118,10 +118,10 @@ MASTER
 
 Struktur sheet produk:
 
-- Baris 1: waktu upload terakhir
-- Baris 2: waktu sinkronisasi kasir terakhir
-- Baris 3: header kolom
-- Baris 4 dan seterusnya: data produk
+- Sheet kategori (`BA`, `BG`, `BK`, `KG`, `TL`): baris 1 waktu upload terakhir, baris 2 waktu sinkronisasi kasir terakhir, baris 3 header kolom, baris 4 dan seterusnya data produk.
+- Sheet `MASTER`: baris 1 status, baris 2 header, baris 3 instruksi, baris 4 checkbox Undo, baris 5 dan seterusnya area paste.
+
+**Alur upload:** aplikasi menulis data ke `MASTER` terlebih dahulu, kemudian menjalankan processor yang sama dengan paste manual. Processor membackup data lama ke `_BACKUP`, mendistribusikan produk berdasarkan prefix SKU ke sheet kategori, rebuild `ALL PRODUK`, lalu membersihkan area data `MASTER`.
 
 Jangan mengedit sheet `ALL PRODUK` secara manual. Sheet tersebut dibuat otomatis dari sheet kategori.
 
@@ -157,7 +157,7 @@ Gunakan tombol:
 Profile → Koneksi Multi-Toko → Upload Semua Produk ke Sheet
 ```
 
-Fitur ini menulis ulang data produk di sheet kategori. Pastikan backup sudah tersedia sebelum menggunakannya.
+Fitur ini menulis data ke sheet `MASTER`, lalu menjalankan proses otomatis yang sama seperti paste manual dari Excel. Setelah proses selesai, data dibagi ke sheet kategori dan `ALL PRODUK` dibangun ulang. Pastikan backup sudah tersedia sebelum menggunakannya.
 
 ## Sinkronisasi produk ke aplikasi
 
