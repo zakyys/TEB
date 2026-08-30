@@ -38,9 +38,16 @@ npm run preview
 
 ### 5. Struktur Project (Ringkasan)
 - `src/components/` : Komponen utama (POS, Produk, Transaksi, dsb)
-- `src/lib/` : Utilitas, dummy data
-- `src/App.tsx` : Routing utama
+- `src/lib/` : Utilitas, cache produk, IndexedDB, sinkronisasi, dan domain logic
+- `src/store/` : State cart Zustand yang dipersist
+- `src/App.tsx` : Routing utama dan inisialisasi cache/stock sync
 - `src/main.tsx` : Entry point aplikasi
+- `gas-report-transactions.gs` : Google Apps Script laporan/transaksi
+- `gas-product-database.gs` : Google Apps Script database produk
+- `DEPLOY-GOOGLE-SCRIPT.md` : Panduan dua deployment GAS
+- `PROJECT-CONTEXT.md` : Handoff teknis lengkap untuk sesi/pengembang berikutnya
+
+> **Catatan penting:** aplikasi menggunakan dua deployment GAS terpisah. Stok boleh negatif dan produk kosong (`[]`) adalah state yang valid. Baca [PROJECT-CONTEXT.md](./PROJECT-CONTEXT.md) sebelum melakukan perubahan besar.
 
 ### 6. Fitur Utama
 - Manajemen produk (tambah, edit, hapus, import)
@@ -51,8 +58,10 @@ npm run preview
 
 ---
 
-## 📚 Panduan Pengguna
+## 📚 Dokumentasi
 
-Lihat file [manual-book.md](./manual-book.md) untuk panduan penggunaan aplikasi secara lengkap.
+- [manual-book.md](./manual-book.md) — panduan penggunaan sehari-hari.
+- [DEPLOY-GOOGLE-SCRIPT.md](./DEPLOY-GOOGLE-SCRIPT.md) — setup dua deployment Google Apps Script.
+- [PROJECT-CONTEXT.md](./PROJECT-CONTEXT.md) — struktur kode, storage, kontrak API, aturan bisnis, status terakhir, dan handoff teknis.
 
 ---

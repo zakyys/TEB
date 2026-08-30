@@ -29,8 +29,11 @@ Aplikasi memiliki menu utama di bagian bawah layar:
 
 ### Import Produk Massal
 - Klik **Bulk Import**.
-- Upload file CSV/JSON sesuai format contoh yang tersedia.
-- Pastikan data valid, lalu konfirmasi impor.
+- Download template Excel bila diperlukan, lalu isi kolom `KODE`, `NAMA BARANG`, `HARGA MODAL`, `HARGA JUAL`, dan `STOK AKHIR`.
+- Upload file `.xlsx` atau `.xls`.
+- SKU/KODE dan nama wajib diisi; SKU duplikat dan harga tidak valid akan ditolak.
+- **Stok boleh negatif** dan akan disimpan apa adanya.
+- Import meng-update produk dengan SKU yang sama dan menambahkan SKU baru.
 
 ---
 
@@ -83,7 +86,7 @@ Aplikasi memiliki menu utama di bagian bawah layar:
 3. Klik **Restore Data**.
 4. Konfirmasi, lalu aplikasi akan reload dengan data yang dipulihkan.
 
-> **Penting:** Backup & restore hanya berlaku di browser yang sama. Data akan hilang jika cache dihapus atau browser diinstall ulang. Selalu backup rutin!
+> **Penting:** Data utama produk/transaksi disimpan di browser (IndexedDB) dengan LocalStorage sebagai fallback. Backup & restore tetap hanya berlaku jika backup dipindahkan secara manual ke browser/perangkat lain. Data dapat hilang jika browser storage dihapus atau perangkat rusak. Selalu backup rutin!
 
 ---
 
