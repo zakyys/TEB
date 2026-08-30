@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRoutes, Routes, Route } from "react-router-dom";
 import Home from "./components/home";
 import POSScreen from "./components/pos/POSScreen";
@@ -13,7 +13,7 @@ import PurchaseInput from "@/components/purchase/PurchaseInput";
 import { Toaster } from "@/components/ui/toaster";
 import { PWAStatus } from "@/components/layout/PWAStatus";
 import { getStoreName } from "@/lib/utils";
-import { initProductCache, flushProductCache, getProducts, initStockSync } from "@/lib/productCache";
+import { initProductCache, flushProductCache, getProducts, initProductSync, initStockSync } from "@/lib/productCache";
 
 
 // SplashScreen component
@@ -74,7 +74,13 @@ function SplashScreen() {
 function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [storeName, setStoreName] = useState(getStoreName());
-
+  const [backgroundSync, setBackgroundSync] = useState<{
+    kind: 'product' | 'stock';
+    status: 'pending' | 'syncing' | 'success' | 'error';
+    pending: number;
+    message: string;
+  } | null>(null);
+  const backgroundSyncHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Update document title when store name changes
   useEffect(() => {
@@ -98,11 +104,29 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const handleBackgroundSync = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (!detail) return;
+      setBackgroundSync(detail);
+      if (backgroundSyncHideTimer.current) clearTimeout(backgroundSyncHideTimer.current);
+      if (detail.status === 'success') {
+        backgroundSyncHideTimer.current = setTimeout(() => setBackgroundSync(null), 800);
+      }
+    };
+    window.addEventListener('pos:background-sync', handleBackgroundSync);
+    return () => {
+      if (backgroundSyncHideTimer.current) clearTimeout(backgroundSyncHideTimer.current);
+      window.removeEventListener('pos:background-sync', handleBackgroundSync);
+    };
+  }, []);
+
+  useEffect(() => {
     // Initialize product cache during splash screen
     // By the time splash ends, products are loaded in memory
     initProductCache().then(() => {
       console.log('[App] Product cache initialized');
-      // Initialize stock sync after products are loaded
+      // Initialize background product and stock sync after products are loaded
+      initProductSync();
       initStockSync();
     }).catch(err => {
       console.error('[App] Product cache init failed:', err);
@@ -144,6 +168,22 @@ function App() {
   return (
     <Suspense fallback={<p>Loading...</p>}>
       <>
+        {backgroundSync && (
+          <div
+            className={`fixed top-2 left-1/2 z-[10000] -translate-x-1/2 rounded-full px-3 py-1.5 text-[11px] font-medium shadow-md transition-opacity ${
+              backgroundSync.status === 'error'
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : backgroundSync.status === 'success'
+                  ? 'bg-green-50 text-green-700 border border-green-200'
+                  : 'bg-blue-50 text-blue-700 border border-blue-200'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {backgroundSync.status === 'syncing' ? '↻ ' : backgroundSync.status === 'success' ? '✓ ' : backgroundSync.status === 'error' ? '⚠ ' : '⏳ '}
+            {backgroundSync.message}
+          </div>
+        )}
         <div className="pb-16">
           {" "}
           {/* Add padding to prevent content from being hidden behind the bottom nav */}

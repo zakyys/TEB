@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency, getConfig } from "@/lib/utils";
-import { getProducts as getCachedProducts, setProducts as setCachedProducts } from "@/lib/productCache";
+import { getProducts as getCachedProducts, queueProductSync, setProducts as setCachedProducts } from "@/lib/productCache";
 import {
   Search,
   Plus,
@@ -304,36 +304,6 @@ const ProductManagement = () => {
     }
   };
 
-  // Upload product to Google Sheets (saat edit/tambah)
-  const pushProductToSheet = async (product: Product) => {
-    try {
-      const config = getConfig();
-      const targetUrl = config.productGasUrl;
-      if (!targetUrl) return;
-
-      const response = await fetch(targetUrl, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({
-          action: "updateProductActive",
-          product: {
-            kode: product.sku,
-            nama: product.name,
-            hargaBeli: product.purchasePrice || 0,
-            hargaJual: product.price || 0,
-            stok: product.stock || 0
-          }
-        })
-      });
-      if (!response.ok) {
-        throw new Error(`Server mengembalikan status ${response.status}`);
-      }
-      console.log(`[Sync] Updated ${product.sku} on Sheet`);
-    } catch (error) {
-      console.error("Failed to push product to sheet:", error);
-    }
-  };
-
   // Delete product from Google Sheets
   const deleteProductFromSheet = async (sku: string) => {
     try {
@@ -613,8 +583,8 @@ const ProductManagement = () => {
     setProducts(updatedProducts);
     setCachedProducts(updatedProducts);
 
-    // AUTO-PUSH ke Google Sheet
-    pushProductToSheet(productToAdd);
+    // Masuk antrean sinkronisasi; dikirim di background dan di-retry saat buka/online lagi.
+    queueProductSync(productToAdd);
 
     try { window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts })); } catch { }
 
@@ -647,8 +617,8 @@ const ProductManagement = () => {
     setProducts(updatedProducts);
     setCachedProducts(updatedProducts);
 
-    // AUTO-PUSH ke Google Sheet
-    pushProductToSheet(productToSave);
+    // Masuk antrean sinkronisasi; dikirim di background dan di-retry saat buka/online lagi.
+    queueProductSync(productToSave);
 
     setIsEditProductOpen(false);
   };

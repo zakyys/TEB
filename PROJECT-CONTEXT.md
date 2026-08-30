@@ -64,7 +64,7 @@ Aplikasi sudah dipakai operasional selama sekitar enam bulan. Prinsip utama: **p
 
 ### Library/domain
 
-- `src/lib/productCache.ts` — cache produk memory + IndexedDB + LocalStorage fallback; antrean stock sync.
+- `src/lib/productCache.ts` — cache produk memory + IndexedDB + LocalStorage fallback; antrean product sync dan stock sync.
 - `src/lib/indexedDB.ts` — IndexedDB transaksi dan fallback LocalStorage.
 - `src/lib/transactions.ts` — `completeTransactionUtil`, pengurangan stok tanpa clamp, receipt.
 - `src/lib/utils.ts` — `LS_KEYS`, config, backup/restore, laporan/helper.
@@ -113,6 +113,7 @@ Key penting di `src/lib/utils.ts`:
 - `pos_telegram_chat_id`.
 - `POS_STORE` — Zustand cart.
 - `pos_pending_stock_sync` — antrean stok yang belum berhasil dikirim.
+- `pos_pending_product_sync` — antrean tambah/edit produk yang belum berhasil dikirim ke GAS Database Produk.
 
 ## 6. Kontrak frontend ↔ GAS database produk
 
@@ -161,6 +162,8 @@ Sheet database produk:
 6. Jika offline/tidak ada URL/request gagal, update disimpan di `pos_pending_stock_sync` dan dicoba saat online.
 7. Sync manual dari Sheet mengganti detail produk dari Sheet. Auto-sync mempertahankan stok lokal untuk SKU yang sudah ada agar Sheet stale tidak menimpa stok lokal.
 8. Import Excel melakukan validasi penuh dulu, baru merge ke cache. Merge berdasarkan SKU memakai `Map`.
+9. Tambah/edit produk dimasukkan ke `pos_pending_product_sync`, dikirim background, dan dicoba ulang saat aplikasi dibuka atau koneksi kembali.
+10. Status background product/stock sync dikirim lewat event `pos:background-sync` dan ditampilkan sebagai ticker global di bagian atas aplikasi. Status sukses hilang otomatis setelah 800 ms.
 
 ## 8. Perubahan terakhir yang sudah dilakukan
 
@@ -173,6 +176,8 @@ Sheet database produk:
 - Memperketat sync GET: URL khusus produk, cache busting, `response.ok`, JSON contract, validasi row, duplikat SKU, empty-response protection.
 - Memperbaiki import Excel 5.000 baris agar O(existing + imported), validasi SKU/nama/harga, dan tetap menerima stok negatif.
 - Memperbaiki upload massal ke endpoint khusus produk dengan validasi respons.
+- Menambahkan antrean background untuk tambah/edit produk agar dilanjutkan saat aplikasi dibuka atau online kembali.
+- Menambahkan ticker status sinkronisasi global; pesan sukses hilang otomatis setelah 800 ms.
 - Menambah validasi backend GAS: batas 5.000, SKU duplicate, numeric validation, harga non-negatif, stok boleh negatif.
 - Mengubah stock sync menjadi endpoint batch.
 - Menyamakan pencocokan SKU di POS, cart, refund, exchange, dan transaction history.

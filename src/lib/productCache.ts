@@ -300,6 +300,204 @@ export function findProductByName(name: string): any | undefined {
     return productCache.find(p => p.name === name);
 }
 
+// ============ Background Product Sync (Offline Resilience) ============
+
+const PENDING_PRODUCT_KEY = 'pos_pending_product_sync';
+type ProductSyncPayload = {
+    kode: string;
+    nama: string;
+    hargaBeli: number;
+    hargaJual: number;
+    stok: number;
+};
+
+type BackgroundSyncStatus = 'pending' | 'syncing' | 'success' | 'error';
+
+let pendingProductSync: Map<string, ProductSyncPayload> = new Map();
+let productSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let productSyncRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let productSyncInFlight = false;
+let productSyncInitialized = false;
+
+function emitBackgroundSync(
+    kind: 'product' | 'stock',
+    status: BackgroundSyncStatus,
+    pending: number,
+    message: string,
+): void {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('pos:background-sync', {
+        detail: { kind, status, pending, message },
+    }));
+}
+
+function getProductGasUrl(): string {
+    try {
+        const raw = localStorage.getItem('pos_product_gas_url');
+        return raw ? String(JSON.parse(raw) || '').trim() : '';
+    } catch {
+        return '';
+    }
+}
+
+function persistPendingProducts(): void {
+    try {
+        if (pendingProductSync.size > 0) {
+            localStorage.setItem(PENDING_PRODUCT_KEY, JSON.stringify(Object.fromEntries(pendingProductSync)));
+        } else {
+            localStorage.removeItem(PENDING_PRODUCT_KEY);
+        }
+    } catch (error) {
+        console.error('[ProductSync] Failed to persist pending products:', error);
+    }
+}
+
+function loadPendingProducts(): void {
+    try {
+        const raw = localStorage.getItem(PENDING_PRODUCT_KEY);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        for (const [kode, product] of Object.entries(data || {})) {
+            if (product && typeof product === 'object') {
+                pendingProductSync.set(kode, product as ProductSyncPayload);
+            }
+        }
+        if (pendingProductSync.size > 0) {
+            emitBackgroundSync('product', 'pending', pendingProductSync.size,
+                `${pendingProductSync.size} perubahan produk menunggu dikirim ke Sheet`);
+        }
+    } catch (error) {
+        console.error('[ProductSync] Failed to load pending products:', error);
+    }
+}
+
+function scheduleProductSync(delay = 500): void {
+    if (productSyncRetryTimer) {
+        clearTimeout(productSyncRetryTimer);
+        productSyncRetryTimer = null;
+    }
+    if (productSyncTimer) clearTimeout(productSyncTimer);
+    productSyncTimer = setTimeout(() => {
+        productSyncTimer = null;
+        void flushPendingProducts();
+    }, delay);
+}
+
+/**
+ * Initialize product sync queue and retry pending add/edit operations on startup.
+ */
+export function initProductSync(): void {
+    if (productSyncInitialized) return;
+    productSyncInitialized = true;
+    loadPendingProducts();
+
+    const retry = () => {
+        if (pendingProductSync.size > 0) {
+            emitBackgroundSync('product', 'pending', pendingProductSync.size,
+                `${pendingProductSync.size} perubahan produk menunggu dikirim ke Sheet`);
+            scheduleProductSync(500);
+        }
+    };
+    window.addEventListener('online', retry);
+    window.addEventListener('configUpdated', retry);
+
+    if (pendingProductSync.size > 0 && (typeof navigator === 'undefined' || navigator.onLine)) {
+        scheduleProductSync(1500);
+    }
+}
+
+/**
+ * Save an add/edit operation locally and send it in the background.
+ * The latest operation for each SKU replaces older pending data.
+ */
+export function queueProductSync(product: any): void {
+    const kode = String(product?.sku ?? '').trim().toUpperCase();
+    if (!kode || kode === '-') return;
+
+    const payload: ProductSyncPayload = {
+        kode,
+        nama: String(product?.name ?? '').trim(),
+        hargaBeli: Number(product?.purchasePrice) || 0,
+        hargaJual: Number(product?.price) || 0,
+        // Negative stock is valid and must be preserved.
+        stok: Number(product?.stock) || 0,
+    };
+    pendingProductSync.set(kode, payload);
+    persistPendingProducts();
+    emitBackgroundSync('product', 'pending', pendingProductSync.size,
+        `Produk ${kode} disimpan, menunggu sinkronisasi ke Sheet`);
+
+    if (!productSyncInitialized) initProductSync();
+    if (typeof navigator === 'undefined' || navigator.onLine) scheduleProductSync();
+}
+
+async function flushPendingProducts(): Promise<void> {
+    if (productSyncInFlight || pendingProductSync.size === 0) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        emitBackgroundSync('product', 'pending', pendingProductSync.size,
+            `${pendingProductSync.size} produk menunggu koneksi internet`);
+        return;
+    }
+
+    const gasUrl = getProductGasUrl();
+    if (!gasUrl) {
+        emitBackgroundSync('product', 'error', pendingProductSync.size,
+            'Produk tersimpan lokal; URL GAS Database Produk belum diisi');
+        if (productSyncRetryTimer) clearTimeout(productSyncRetryTimer);
+        productSyncRetryTimer = setTimeout(() => {
+            productSyncRetryTimer = null;
+            if (pendingProductSync.size > 0) emitBackgroundSync('product', 'pending', pendingProductSync.size,
+                `${pendingProductSync.size} produk menunggu konfigurasi URL GAS`);
+        }, 10000);
+        return;
+    }
+
+    productSyncInFlight = true;
+    const batch = Array.from(pendingProductSync.entries());
+    let syncedCount = 0;
+
+    try {
+        for (const [kode, payload] of batch) {
+            if (pendingProductSync.get(kode) !== payload) continue;
+            emitBackgroundSync('product', 'syncing', pendingProductSync.size,
+                `Mengirim ${kode} ke Google Sheet...`);
+
+            try {
+                const response = await fetch(gasUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify({ action: 'updateProductActive', product: payload }),
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const result = await response.json();
+                if (result.success !== true) throw new Error(result.error || 'Server menolak perubahan');
+                if (pendingProductSync.get(kode) === payload) {
+                    pendingProductSync.delete(kode);
+                    syncedCount++;
+                }
+            } catch (error) {
+                console.error(`[ProductSync] Failed ${kode}:`, error);
+            }
+        }
+    } finally {
+        productSyncInFlight = false;
+        persistPendingProducts();
+    }
+
+    if (pendingProductSync.size > 0) {
+        emitBackgroundSync('product', 'error', pendingProductSync.size,
+            `${syncedCount} tersinkron; ${pendingProductSync.size} masih menunggu dan akan dicoba lagi`);
+        if (productSyncRetryTimer) clearTimeout(productSyncRetryTimer);
+        productSyncRetryTimer = setTimeout(() => {
+            productSyncRetryTimer = null;
+            void flushPendingProducts();
+        }, 10000);
+    } else if (syncedCount > 0) {
+        emitBackgroundSync('product', 'success', 0,
+            `${syncedCount} perubahan produk berhasil dikirim ke Sheet`);
+    }
+}
+
 // ============ Push Stock to Sheet (Bidirectional Sync + Offline Resilience) ============
 
 const PENDING_STOCK_KEY = 'pos_pending_stock_sync';
@@ -375,8 +573,10 @@ export function pushStockToSheet(updates: Array<{ sku: string; stock: number }>)
     // Persist immediately (survive crash/close)
     _persistPending();
 
-    if (!navigator.onLine) {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
         console.log(`[StockSync] ⏸ Offline — ${pendingStockUpdates.size} updates queued (saved to localStorage)`);
+        emitBackgroundSync('stock', 'pending', pendingStockUpdates.size,
+            `${pendingStockUpdates.size} perubahan stok menunggu koneksi internet`);
         return;
     }
 
@@ -387,8 +587,10 @@ export function pushStockToSheet(updates: Array<{ sku: string; stock: number }>)
 async function _flushStockToSheet(): Promise<void> {
     if (pendingStockUpdates.size === 0) return;
 
-    if (!navigator.onLine) {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
         console.log('[StockSync] Still offline, keeping updates queued');
+        emitBackgroundSync('stock', 'pending', pendingStockUpdates.size,
+            `${pendingStockUpdates.size} perubahan stok menunggu koneksi internet`);
         return;
     }
 
@@ -448,8 +650,12 @@ async function _flushStockToSheet(): Promise<void> {
         }
         console.log(`[StockSync] ✓ Batch request sent for ${stockUpdates.length} stock updates`);
         _persistPending();
+        emitBackgroundSync('stock', 'success', pendingStockUpdates.size,
+            `${stockUpdates.length} perubahan stok berhasil dikirim ke Sheet`);
     } catch (err) {
         console.error('[StockSync] Failed:', err);
+        emitBackgroundSync('stock', 'error', pendingStockUpdates.size,
+            'Perubahan stok belum terkirim; akan dicoba lagi');
         for (const u of updates) {
             if (!pendingStockUpdates.has(u.kode)) {
                 pendingStockUpdates.set(u.kode, u.stok);
