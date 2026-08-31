@@ -170,6 +170,13 @@ const TransactionHistory: React.FC = () => {
   const [tukarPage, setTukarPage] = useState(1);
   const ITEMS_PER_PAGE = 25;
 
+  // Refund/tukar hanya boleh dilakukan pada transaksi yang dibuat hari ini.
+  // Gunakan format tanggal yang sama dengan alur transaksi dan laporan (UTC ISO date).
+  const isTransactionToday = (transaction: Transaction | null | undefined) => {
+    if (!transaction?.date) return false;
+    return transaction.date.split('T')[0] === new Date().toISOString().split('T')[0];
+  };
+
   // Reset pagination when filters change
   useEffect(() => {
     setItemTerjualPage(1);
@@ -606,7 +613,14 @@ const TransactionHistory: React.FC = () => {
   };
 
   const createReturnTransaction = () => {
-    if (!selectedTransaction) return;
+    if (!selectedTransaction || !isTransactionToday(selectedTransaction)) {
+      toast({
+        title: "Refund tidak tersedia",
+        description: "Refund hanya dapat dilakukan untuk transaksi hari ini.",
+        variant: "destructive"
+      });
+      return;
+    }
     const trxId = selectedTransaction.id;
     const validIndex = selectedItemIndex !== null && selectedItemIndex >= 0 && selectedItemIndex < selectedTransaction.items.length;
     const products = getProducts();
@@ -884,6 +898,14 @@ const TransactionHistory: React.FC = () => {
   // Handle clicking exchange button - show options
   const handleExchangeClick = () => {
     if (!selectedTransaction) return;
+    if (!isTransactionToday(selectedTransaction)) {
+      toast({
+        title: "Aksi tidak tersedia",
+        description: "Refund dan tukar hanya dapat dilakukan untuk transaksi hari ini.",
+        variant: "destructive"
+      });
+      return;
+    }
     const validIndex = selectedItemIndex !== null && selectedItemIndex >= 0 && selectedItemIndex < selectedTransaction.items.length;
     const item = validIndex ? selectedTransaction.items[selectedItemIndex!] : selectedTransaction.items[0];
     const index = validIndex ? selectedItemIndex! : 0;
@@ -895,6 +917,14 @@ const TransactionHistory: React.FC = () => {
 
   // Handle selecting exchange with new product
   const handleChooseExchange = () => {
+    if (!isTransactionToday(selectedTransaction)) {
+      toast({
+        title: "Aksi tidak tersedia",
+        description: "Refund dan tukar hanya dapat dilakukan untuk transaksi hari ini.",
+        variant: "destructive"
+      });
+      return;
+    }
     setShowExchangeOptions(false);
     setShowProductPicker(true);
     setProductPickerSearch("");
@@ -918,7 +948,16 @@ const TransactionHistory: React.FC = () => {
 
   // Process the exchange
   const processExchange = async () => {
-    if (!selectedTransaction || !exchangeItemToReturn || !selectedNewProduct) return;
+    if (!selectedTransaction || !isTransactionToday(selectedTransaction) || !exchangeItemToReturn || !selectedNewProduct) {
+      if (selectedTransaction && !isTransactionToday(selectedTransaction)) {
+        toast({
+          title: "Aksi tidak tersedia",
+          description: "Refund dan tukar hanya dapat dilakukan untuk transaksi hari ini.",
+          variant: "destructive"
+        });
+      }
+      return;
+    }
 
     const products = getProducts();
     const oldItem = exchangeItemToReturn.item;
@@ -1550,7 +1589,7 @@ const TransactionHistory: React.FC = () => {
                                       {isSelisihNegatif ? '' : ''}{formatCurrency(item.price * item.quantity)}
                                     </span>
                                     {/* Tombol Refund - Exchange feature disabled, disabled if already refunded */}
-                                    {!isSelisihTukar && !(item as any).refunded && !(item as any).partiallyRefunded && !(item as any).sameDayRefunded && !(item as any).sameDayPartialRefund && (
+                                    {isTransactionToday(transaction) && !isSelisihTukar && !(item as any).refunded && !(item as any).partiallyRefunded && !(item as any).sameDayRefunded && !(item as any).sameDayPartialRefund && (
                                       <Button
                                         size="sm"
                                         variant="outline"
@@ -2181,7 +2220,7 @@ const TransactionHistory: React.FC = () => {
                 <Button variant="outline" className="flex-1 flex items-center justify-center gap-2" onClick={handlePrintReceipt}>
                   <Printer className="h-4 w-4" /> Cetak Struk
                 </Button>
-                {selectedTransaction.status === "completed" && (
+                {selectedTransaction.status === "completed" && isTransactionToday(selectedTransaction) && (
                   <Button variant="outline" className="flex-1 flex items-center justify-center gap-2" onClick={handleExchangeClick}>
                     <RotateCcw className="h-4 w-4" /> {(selectedItemIndex !== null && selectedItemIndex >= 0 && selectedItemIndex < selectedTransaction.items.length) ? 'Tukar Item Ini' : 'Tukar'}
                   </Button>
