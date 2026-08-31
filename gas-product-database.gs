@@ -90,7 +90,7 @@ function onSheetChange(e) {
 }
 
 function getSheetNameFromCode(kode) {
-    var prefix = String(kode || '').trim().split('-')[0].toUpperCase();
+    var prefix = String(kode || '').trim().substring(0, 2).toUpperCase();
     // Prefix resmi mendapat sheet kategori sendiri. Kode lain masuk ke
     // penampung eksplisit agar tidak tercampur dengan BAUT GENERAL.
     if (KNOWN_CATEGORY_PREFIXES.indexOf(prefix) >= 0) return prefix;
@@ -424,7 +424,7 @@ function formatSheetHeaders(sheet) {
     newRules.push(dupeRule);
 
     // Rule 2: ORANGE jika FORMAT KODE salah (hanya sheet kategori)
-    if (CATEGORY_SHEETS.indexOf(sheetName) >= 0) {
+    if (KNOWN_CATEGORY_PREFIXES.indexOf(sheetName) >= 0) {
         var regex = "^" + sheetName + "-[0-9]{4}[A-Za-z]*$";
         var wrongFormatRule = SpreadsheetApp.newConditionalFormatRule()
             .whenFormulaSatisfied('=AND(A' + DATA_START_ROW + '<>"";NOT(REGEXMATCH(UPPER(A' + DATA_START_ROW + ');"' + regex + '")))')
@@ -442,7 +442,7 @@ function formatSheetHeaders(sheet) {
     sheet.getRange("A1:A").clearDataValidations();
 
     // Data Validation baru (hanya sheet kategori, mulai dari baris data)
-    if (CATEGORY_SHEETS.indexOf(sheetName) >= 0) {
+    if (KNOWN_CATEGORY_PREFIXES.indexOf(sheetName) >= 0) {
         var regex = "^" + sheetName + "-[0-9]{4}[A-Za-z]*$";
         var validationRule = SpreadsheetApp.newDataValidation()
             .requireFormulaSatisfied('=AND(COUNTIF($A$' + DATA_START_ROW + ':$A;A' + DATA_START_ROW + ')<=1;OR(A' + DATA_START_ROW + '="";REGEXMATCH(UPPER(A' + DATA_START_ROW + ');"' + regex + '")))')

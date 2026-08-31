@@ -136,7 +136,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 const getCategoryFromSku = (sku: string): string => {
-  const prefix = String(sku || '').trim().split('-')[0].toUpperCase();
+  const prefix = String(sku || '').trim().substring(0, 2).toUpperCase();
   return CATEGORY_LABELS[prefix] || 'NO KATEGORI';
 };
 
@@ -429,8 +429,9 @@ const ProductManagement = () => {
       return true;
     })
     .filter((product) => {
-      // Filter by SKU prefix
+      // Filter by SKU prefix; unknown prefixes are grouped as NO KATEGORI.
       if (selectedPrefix === "all") return true;
+      if (selectedPrefix === "NO KATEGORI") return getCategoryFromSku(product.sku || '') === "NO KATEGORI";
       return (product.sku || "").toUpperCase().startsWith(selectedPrefix);
     })
     /* DISABLED - Margin filter causing issues

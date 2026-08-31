@@ -245,7 +245,7 @@ Periksa hal berikut:
 URL masih mengarah ke script lama. Database produk terbaru tidak memakai satu sheet `Produk`; database ini memakai:
 
 ```text
-BA, BG, BK, KG, TL, ALL PRODUK, MASTER
+BA, BG, BK, KG, TL, BT, NO KATEGORI, ALL PRODUK, MASTER
 ```
 
 Deploy ulang menggunakan `gas-product-database.gs`.
