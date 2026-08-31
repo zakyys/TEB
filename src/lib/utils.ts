@@ -83,6 +83,25 @@ export function formatCurrency(amount: number): string {
   }).format(amount);
 }
 
+export function getRelativeDateBadge(value: string | Date | undefined): string | null {
+  if (!value) return null;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const startOfDate = new Date(date);
+  startOfDate.setHours(0, 0, 0, 0);
+  const daysAgo = Math.floor((startOfToday.getTime() - startOfDate.getTime()) / 86_400_000);
+
+  if (daysAgo === 0) return "Hari ini";
+  if (daysAgo === 1) return "Kemarin";
+  if (daysAgo === 2) return "2 Hari Lalu";
+  if (daysAgo === 3) return "3 Hari Lalu";
+  return null;
+}
+
 // Backup all POS data to a text string
 export function backupData(): string {
   try {

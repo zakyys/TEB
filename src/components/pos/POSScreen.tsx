@@ -994,13 +994,13 @@ const POSScreen = () => {
               <ScrollArea className="max-h-48 sm:max-h-64 w-full rounded-lg border bg-gray-50 dark:bg-gray-800 p-2 sm:p-4 mb-2">
                 <div className="font-mono text-xs sm:text-sm whitespace-pre-wrap break-words">
                    {receiptContent.split("\n").map((line, index) => {
-                     const isTodayLine = line.includes("• Hari ini") || line.includes("• HARI INI");
-                     if (line.trimStart().startsWith("Tanggal:") && isTodayLine) {
+                     const relativeDateBadge = line.match(/\s*•\s*(Hari ini|HARI INI|Kemarin|2 Hari Lalu|3 Hari Lalu)\s*$/)?.[1];
+                     if (line.trimStart().startsWith("Tanggal:") && relativeDateBadge) {
                        return (
                          <div key={index} className="flex flex-wrap items-center gap-1">
-                           <span>{line.replace(/\s*•\s*(Hari ini|HARI INI)\s*$/, "")}</span>
+                           <span>{line.replace(/\s*•\s*(Hari ini|HARI INI|Kemarin|2 Hari Lalu|3 Hari Lalu)\s*$/, "")}</span>
                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
-                             Hari ini
+                             {relativeDateBadge === "HARI INI" ? "Hari ini" : relativeDateBadge}
                            </span>
                          </div>
                        );

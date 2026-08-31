@@ -31,7 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useNavigate } from "react-router-dom";
 
-import { formatCurrency, getFromLS, LS_KEYS, getStoreName, getConfig, saveToLS } from "@/lib/utils";
+import { formatCurrency, getFromLS, getRelativeDateBadge, LS_KEYS, getStoreName, getConfig, saveToLS } from "@/lib/utils";
 import { getProducts as getCachedProducts } from "@/lib/productCache";
 import { safeGetAllTransactions, safeInitAndMigrate, getAllTransactions } from "@/lib/indexedDB";
 import { getDailyStatsInRange, addVisitor, addVisitorLost, getVisitorStatsByDate, getLostDescriptionsByDate, removeLastVisitor, removeLastLost, getLostEntriesByDate, removeLostByTimestamp, updateLostDescription, VisitorLostLog, getVisitorStatsByTime, addVisitorBefore12, addVisitorAfter12, removeVisitorBefore12, removeVisitorAfter12 } from "@/lib/visitors";
@@ -2177,15 +2177,9 @@ const Dashboard = () => {
                           <div className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1">
                             <Calendar className="h-3 w-3 text-blue-500" />
                             <span className="text-blue-600">{new Date(item.soldAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</span>
-                            {(() => {
-                              const soldDate = new Date(item.soldAt);
-                              const today = new Date();
-                              return soldDate.getFullYear() === today.getFullYear() &&
-                                soldDate.getMonth() === today.getMonth() &&
-                                soldDate.getDate() === today.getDate();
-                            })() && (
+                            {getRelativeDateBadge(item.soldAt) && (
                               <span className="ml-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
-                                Hari ini
+                                {getRelativeDateBadge(item.soldAt)}
                               </span>
                             )}
                           </div>

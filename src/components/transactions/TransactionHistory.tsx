@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useLocation } from "react-router-dom";
-import { getFromLS, saveToLS, LS_KEYS, formatCurrency, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
+import { getFromLS, saveToLS, getRelativeDateBadge, LS_KEYS, formatCurrency, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
 import { safeGetAllTransactions, safeSaveAllTransactions, safeInitAndMigrate } from "@/lib/indexedDB";
 import { getProducts, setProducts, pushStockToSheet } from "@/lib/productCache";
 import { DUMMY_TRANSACTIONS, DUMMY_PRODUCTS } from "@/lib/dummyData";
@@ -1360,15 +1360,9 @@ const TransactionHistory: React.FC = () => {
                               <p className="font-medium text-sm">{t.customer}</p>
                               <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-1">
                                  <span>{t.id} • {new Date(t.date).toLocaleString("id-ID")}</span>
-                                 {(() => {
-                                   const transactionDate = new Date(t.date);
-                                   const today = new Date();
-                                   return transactionDate.getFullYear() === today.getFullYear() &&
-                                     transactionDate.getMonth() === today.getMonth() &&
-                                     transactionDate.getDate() === today.getDate();
-                                 })() && (
+                                 {getRelativeDateBadge(t.date) && (
                                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
-                                     Hari ini
+                                     {getRelativeDateBadge(t.date)}
                                    </span>
                                  )}
                                </p>
@@ -1590,15 +1584,9 @@ const TransactionHistory: React.FC = () => {
                                   <div className={`flex items-center gap-1 text-[10px] mb-1 ${getTextClass()}`}>
                                     <Calendar className={`h-3.5 w-3.5 ${getIconClass()}`} />
                                     <span>{isSelisihTukar ? 'Tanggal Tukar' : 'Tanggal Beli'}: {new Date(transaction.date).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</span>
-                                     {(() => {
-                                       const transactionDate = new Date(transaction.date);
-                                       const today = new Date();
-                                       return transactionDate.getFullYear() === today.getFullYear() &&
-                                         transactionDate.getMonth() === today.getMonth() &&
-                                         transactionDate.getDate() === today.getDate();
-                                     })() && (
+                                     {getRelativeDateBadge(transaction.date) && (
                                        <span className="ml-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
-                                         Hari ini
+                                         {getRelativeDateBadge(transaction.date)}
                                        </span>
                                      )}
                                   </div>
@@ -2281,11 +2269,7 @@ const TransactionHistory: React.FC = () => {
               const trx = selectedTransaction;
               const subtotal = trx.items.reduce((s, it) => s + it.price * it.quantity, 0);
               const dateStr = `${new Date(trx.date).toLocaleDateString('id-ID')} ${new Date(trx.date).toLocaleTimeString('id-ID')}`;
-              const transactionDate = new Date(trx.date);
-              const today = new Date();
-              const isTrxToday = transactionDate.getFullYear() === today.getFullYear() &&
-                transactionDate.getMonth() === today.getMonth() &&
-                transactionDate.getDate() === today.getDate();
+              const relativeDateBadge = getRelativeDateBadge(trx.date);
               return (
                 <div className="receipt">
                   <div className="center" style={{ marginBottom: 8 }}>
@@ -2298,7 +2282,7 @@ const TransactionHistory: React.FC = () => {
                     <p>No. Transaksi: {trx.id}</p>
                     <p>
                       Tanggal: {dateStr}
-                      {isTrxToday && <span className="today-badge">Hari ini</span>}
+                      {relativeDateBadge && <span className="today-badge">{relativeDateBadge}</span>}
                     </p>
                     <p>Pelanggan: {trx.customer}</p>
                   </div>
