@@ -1,7 +1,7 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { getAllTransactions, saveAllTransactions, clearAllTransactions, initDB } from "./indexedDB";
-import { getProducts, setProducts } from "./productCache";
+import { getAllTransactions, saveAllTransactions, clearAllTransactions, initDB, safeInitAndMigrate } from "./indexedDB";
+import { getProducts, setProducts, flushProductCache } from "./productCache";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -40,6 +40,37 @@ export function saveToLS(key: string, value: any): void {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (error) {
     console.error(`Error saving item ${key} to localStorage:`, error);
+  }
+}
+
+// Some legacy settings are stored as raw strings, while newer settings use JSON.
+// Read both formats so Backup Full preserves the exact persisted value.
+function getStoredValue<T>(key: string, defaultValue: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return defaultValue;
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return raw as T;
+    }
+  } catch (error) {
+    console.error(`Error getting stored value ${key}:`, error);
+    return defaultValue;
+  }
+}
+
+function saveStoredValue(key: string, value: unknown): void {
+  try {
+    if (value === null || value === undefined) {
+      localStorage.removeItem(key);
+    } else if (typeof value === 'string' && !value.startsWith('{') && !value.startsWith('[')) {
+      localStorage.setItem(key, value);
+    } else {
+      localStorage.setItem(key, JSON.stringify(value));
+    }
+  } catch (error) {
+    console.error(`Error saving stored value ${key}:`, error);
   }
 }
 
@@ -206,48 +237,86 @@ export async function shareBackupToWhatsApp(ownerPhone: string = "6289523964793"
   }
 }
 
-// Backup all data as downloadable JSON file
+// Backup all data as downloadable JSON file.
+// Includes primary stores plus recovery queues/drafts that affect data safety.
 export async function backupAllDataToFile(): Promise<void> {
   try {
-    // Get transactions from IndexedDB (primary source)
+    // Complete pending migrations/writes before taking the snapshot.
+    await safeInitAndMigrate();
+    // Flush the product cache so the backup reflects the latest in-memory state.
+    await flushProductCache();
+
     let allTransactions: any[] = [];
+    let transactionSource: 'indexeddb' | 'localstorage' = 'indexeddb';
     try {
       allTransactions = await getAllTransactions();
     } catch (e) {
-      // Fallback to localStorage if IndexedDB fails
-      allTransactions = getFromLS(LS_KEYS.TRANSACTIONS, []);
+      transactionSource = 'localstorage';
+      allTransactions = getFromLS<any[]>(LS_KEYS.TRANSACTIONS, []);
+      if (!Array.isArray(allTransactions) || allTransactions.length === 0) {
+        allTransactions = getFromLS<any[]>('pos_transactions', []);
+      }
     }
 
-    // Get exchange and refund records
-    const exchanges = getFromLS('bengkel_exchanges', []);
-    const refunds = getFromLS('bengkel_refunds', []);
+    if (!Array.isArray(allTransactions)) {
+      throw new Error('Data transaksi tidak valid');
+    }
 
-    // Get purchase notes if any
-    const purchaseNotes = getFromLS('purchase_notes', []);
+    // Include legacy snapshots for diagnosis/recovery, but never replace a
+    // valid empty IndexedDB store with potentially stale localStorage data.
+    const localStorageTransactions = getFromLS<any[]>(LS_KEYS.TRANSACTIONS, []);
+    const legacyTransactions = getFromLS<any[]>('pos_transactions', []);
+
+    const persistedPosStore = getFromLS<any | null>('POS_STORE', null);
+    const activeCart = Array.isArray(persistedPosStore?.state?.cart)
+      ? persistedPosStore.state.cart
+      : getFromLS<any[]>(LS_KEYS.CART, []);
+    const enablePPN = typeof persistedPosStore?.state?.enablePPN === 'boolean'
+      ? persistedPosStore.state.enablePPN
+      : getFromLS(LS_KEYS.ENABLE_PPN, false);
 
     const backupData = {
       type: "full-backup",
       timestamp: new Date().toISOString(),
-      version: "2.2", // Upgraded version with Multi-Toko connection
+      version: "2.3",
       data: {
         products: getProducts(),
-        transactions: allTransactions, // From IndexedDB
-        profile: getFromLS(LS_KEYS.PROFILE, null),
+        transactions: allTransactions,
+        transactionSource,
+        // Keep legacy transaction snapshots available for recovery diagnostics.
+        transactionSnapshots: {
+          localStorage: localStorageTransactions,
+          legacy: legacyTransactions,
+        },
+        profile: getFromLS('bengkel_profile', getFromLS(LS_KEYS.PROFILE, null)),
         visitorsLog: getFromLS(LS_KEYS.VISITORS_LOG, []),
         visitorLostLog: getFromLS(LS_KEYS.VISITOR_LOST_LOG, []),
-        exchanges: exchanges, // Exchange records
-        refunds: refunds, // Refund records
-        purchaseNotes: purchaseNotes, // Purchase notes
-        notes: getFromLS('bengkel_notes', []), // Catatan/Notes
-        cart: getFromLS(LS_KEYS.CART, []), // Current cart
-        enablePPN: getFromLS(LS_KEYS.ENABLE_PPN, false), // PPN setting
-        // Multi-Toko Connection Settings (version 2.2+)
+        exchanges: getFromLS('bengkel_exchanges', []),
+        refunds: getFromLS('bengkel_refunds', []),
+        purchaseNotes: getFromLS('purchase_notes', []),
+        notes: getFromLS('bengkel_notes', []),
+        cart: activeCart,
+        enablePPN,
+        posStore: persistedPosStore,
+        purchaseDraft: getFromLS('nota_draft', null),
+        pendingStockSync: getFromLS('pos_pending_stock_sync', {}),
+        pendingProductSync: getFromLS('pos_pending_product_sync', {}),
+        syncMetadata: {
+          sheetsLastSentTime: getStoredValue<string | null>('sheets_last_sent_time', null),
+          autoSendLastExecuted: getStoredValue<Record<string, string>>('auto_send_last_executed', {}),
+          telegramChannelId: getStoredValue<string | null>('TELEGRAM_CHANNEL_ID', null),
+          telegramAutoSync: getStoredValue<boolean>('TELEGRAM_AUTO_SYNC', false),
+          telegramLastSync: getStoredValue<string | null>('TELEGRAM_LAST_SYNC', null),
+          telegramLastFile: getStoredValue<Record<string, unknown> | null>('TELEGRAM_LAST_FILE', null),
+        },
+        // Connection settings are retained for existing restore compatibility.
         multiTokoConnection: {
           gasUrl: getFromLS(LS_KEYS.GAS_URL, ""),
           productGasUrl: getFromLS(LS_KEYS.PRODUCT_GAS_URL, ""),
           telegramBotToken: getFromLS(LS_KEYS.TELEGRAM_BOT_TOKEN, ""),
           telegramChatId: getFromLS(LS_KEYS.TELEGRAM_CHAT_ID, ""),
         },
+        selectedPrinter: getStoredValue<string | null>('selectedPrinter', null),
       },
     };
 
@@ -257,7 +326,6 @@ export async function backupAllDataToFile(): Promise<void> {
     const a = document.createElement("a");
     a.href = url;
 
-    // Filename: pos-full-YYYY-MM-DD-HH-mm.json
     const now = new Date();
     const filename = `pos-full-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}.json`;
     a.download = filename;
@@ -265,7 +333,8 @@ export async function backupAllDataToFile(): Promise<void> {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // Give the browser time to start the download before releasing the blob URL.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) {
     console.error("Error backing up all data:", error);
     throw new Error("Gagal membuat backup lengkap");
@@ -300,10 +369,11 @@ export function restoreFromFile(file: File): Promise<void> {
             throw new Error("Data backup lengkap tidak valid");
           }
 
-          // Restore products via product cache
+          // Restore products and wait for the product cache to become durable.
           setProducts(backupData.data.products);
+          await flushProductCache();
 
-          // Restore transactions to both localStorage AND IndexedDB
+          // Restore transactions to both localStorage AND IndexedDB.
           saveToLS(LS_KEYS.TRANSACTIONS, backupData.data.transactions);
           try {
             await initDB();
@@ -313,7 +383,46 @@ export function restoreFromFile(file: File): Promise<void> {
           }
 
           if (backupData.data.profile) {
+            // The running app reads bengkel_profile; keep the legacy PROFILE key
+            // too for older screens/backups that still use LS_KEYS.PROFILE.
+            saveToLS('bengkel_profile', backupData.data.profile);
             saveToLS(LS_KEYS.PROFILE, backupData.data.profile);
+          }
+
+          // Restore the current Zustand POS state when present. Older backups only
+          // have cart/enablePPN fields, so support both formats.
+          if (backupData.data.posStore?.state && typeof backupData.data.posStore.state === 'object') {
+            saveToLS('POS_STORE', backupData.data.posStore);
+          } else {
+            const currentPosStore = getFromLS<any | null>('POS_STORE', null);
+            const currentState = currentPosStore?.state && typeof currentPosStore.state === 'object'
+              ? currentPosStore.state
+              : {};
+            saveToLS('POS_STORE', {
+              name: 'POS_STORE',
+              version: currentPosStore?.version ?? 3,
+              state: {
+                ...currentState,
+                ...(Array.isArray(backupData.data.cart) ? { cart: backupData.data.cart } : {}),
+                ...(typeof backupData.data.enablePPN === 'boolean' ? { enablePPN: backupData.data.enablePPN } : {}),
+              },
+            });
+          }
+
+          // Restore the purchase draft and pending sync queues when included in
+          // newer backups. Missing fields are left untouched for old backups.
+          if (Object.prototype.hasOwnProperty.call(backupData.data, 'purchaseDraft')) {
+            if (backupData.data.purchaseDraft === null || backupData.data.purchaseDraft === undefined) {
+              localStorage.removeItem('nota_draft');
+            } else {
+              saveToLS('nota_draft', backupData.data.purchaseDraft);
+            }
+          }
+          if (Object.prototype.hasOwnProperty.call(backupData.data, 'pendingStockSync')) {
+            saveToLS('pos_pending_stock_sync', backupData.data.pendingStockSync || {});
+          }
+          if (Object.prototype.hasOwnProperty.call(backupData.data, 'pendingProductSync')) {
+            saveToLS('pos_pending_product_sync', backupData.data.pendingProductSync || {});
           }
 
           // Restore visitor data if available (version 1.1+)
@@ -350,6 +459,32 @@ export function restoreFromFile(file: File): Promise<void> {
           // Restore PPN setting (version 2.0+)
           if (backupData.data.enablePPN !== undefined) {
             saveToLS(LS_KEYS.ENABLE_PPN, backupData.data.enablePPN);
+          }
+
+          // Restore sync metadata when included in newer backups.
+          if (backupData.data.syncMetadata) {
+            const syncMetadata = backupData.data.syncMetadata;
+            const metadataKeys: Record<string, string> = {
+              sheetsLastSentTime: 'sheets_last_sent_time',
+              autoSendLastExecuted: 'auto_send_last_executed',
+              telegramChannelId: 'TELEGRAM_CHANNEL_ID',
+              telegramAutoSync: 'TELEGRAM_AUTO_SYNC',
+              telegramLastSync: 'TELEGRAM_LAST_SYNC',
+              telegramLastFile: 'TELEGRAM_LAST_FILE',
+            };
+            for (const [field, key] of Object.entries(metadataKeys)) {
+              if (Object.prototype.hasOwnProperty.call(syncMetadata, field)) {
+                saveStoredValue(key, syncMetadata[field]);
+              }
+            }
+          }
+
+          if (Object.prototype.hasOwnProperty.call(backupData.data, 'selectedPrinter')) {
+            if (backupData.data.selectedPrinter === null || backupData.data.selectedPrinter === undefined) {
+              localStorage.removeItem('selectedPrinter');
+            } else {
+              saveStoredValue('selectedPrinter', backupData.data.selectedPrinter);
+            }
           }
 
           // Restore Multi-Toko Connection Settings (version 2.2+)
