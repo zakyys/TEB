@@ -475,141 +475,120 @@ export function validateAndFixData(): { fixed: boolean; issues: string[] } {
   return { fixed, issues };
 }
 
-// Archive old transactions (keep only last X days)
-// If keepDays = 0, delete ALL transactions
-// If keepDays = -1, delete all EXCEPT today
-export async function archiveOldTransactions(keepDays: number = 60): Promise<{ archived: number; remaining: number }> {
-  // Initialize IndexedDB
-  await initDB();
+// Archive old transactions.
+// If keepDays = 0, delete ALL transactions and operational logs.
+// If keepDays = -1, keep only today's transactions.
+// If keepDays = -2, keep transactions from the current calendar month onward.
+// Date cleanup deliberately does not change stock: deleting history must not undo sales.
+export async function archiveOldTransactions(keepDays: number = -2): Promise<{ archived: number; remaining: number }> {
+  const formatLocalDate = (date: Date): string => {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  };
 
-  // Get transactions from IndexedDB
+  const getTransactionLocalDate = (value: unknown): string | null => {
+    if (typeof value !== 'string' || !value.trim()) return null;
+    const dateValue = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) return dateValue;
+
+    const parsed = new Date(dateValue);
+    return Number.isNaN(parsed.getTime()) ? null : formatLocalDate(parsed);
+  };
+
+  const now = new Date();
+  const todayStr = formatLocalDate(now);
+  const currentMonthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+
+  // IndexedDB is primary. Only use localStorage when it cannot be opened/read.
+  let usingIndexedDB = true;
   let transactions: any[];
   try {
+    await initDB();
     transactions = await getAllTransactions();
   } catch (err) {
     console.error('Failed to get transactions from IndexedDB:', err);
+    usingIndexedDB = false;
     transactions = getFromLS<any[]>(LS_KEYS.TRANSACTIONS, []);
   }
 
-  const products = getProducts();
+  if (!Array.isArray(transactions)) {
+    throw new Error('Data transaksi tidak valid');
+  }
 
-  // Helper to return stock for transactions
-  const returnStockForTransactions = (transactionsToDelete: any[]) => {
-    transactionsToDelete.forEach(t => {
-      // Skip hutang transactions — items were already taken by customer
-      if (t.paymentMethod === 'hutang') return;
-
-      if (t.items && Array.isArray(t.items)) {
-        t.items.forEach((item: any) => {
-          // Prefer SKU matching (more precise), only fallback to name if SKU is unavailable
-          let productIndex = -1;
-          if (item.sku) {
-            productIndex = products.findIndex(p => p.sku === item.sku);
-          }
-          if (productIndex === -1 && item.name) {
-            productIndex = products.findIndex(p => p.name === item.name);
-          }
-
-          if (productIndex !== -1 && products[productIndex].stock !== undefined) {
-            products[productIndex].stock += item.quantity || 1;
-          }
-        });
-      }
-    });
-    setProducts(products);
-  };
-
-  // Helper to save transactions to IndexedDB
   const saveTransactionsAsync = async (txs: any[]) => {
-    try {
-      await saveAllTransactions(txs);
-    } catch (err) {
-      console.error('Failed to save to IndexedDB:', err);
-      // Only fallback to localStorage if data is small
-      if (txs.length < 500) {
-        try {
-          saveToLS(LS_KEYS.TRANSACTIONS, txs);
-        } catch (lsErr) {
-          console.error('localStorage also failed:', lsErr);
-        }
-      } else {
-        console.warn('Data too large for localStorage fallback');
-      }
+    if (!usingIndexedDB) {
+      saveToLS(LS_KEYS.TRANSACTIONS, txs);
+      return;
     }
+
+    // Keep legacy/localStorage readers in sync after a successful DB write.
+    await saveAllTransactions(txs);
+    saveToLS(LS_KEYS.TRANSACTIONS, txs);
   };
 
-  // If keepDays is 0, delete ALL transactions, visitors, and lost logs (DEVICE RESET)
-  // NOTE: Does NOT return stock - this is for clean device, not refunds
+  // Hapus Semua is an explicit local operational reset. Products and stock remain.
   if (keepDays === 0) {
     const archivedCount = transactions.length;
-    // Clear IndexedDB transactions
-    await clearAllTransactions();
-    // Clear localStorage backup
+
+    if (usingIndexedDB) {
+      await clearAllTransactions();
+    }
+
     saveToLS(LS_KEYS.TRANSACTIONS, []);
-    // Clear all visitor and lost data
     saveToLS(LS_KEYS.VISITORS_LOG, []);
     saveToLS(LS_KEYS.VISITOR_LOST_LOG, []);
-    // Clear cart
     saveToLS(LS_KEYS.CART, []);
-    // Clear notes/catatan
     saveToLS('bengkel_notes', []);
-    // Clear exchanges and refunds
     saveToLS('bengkel_exchanges', []);
     saveToLS('bengkel_refunds', []);
-    // Clear purchase notes
     saveToLS('purchase_notes', []);
+
+    // Clear the current Zustand cart while preserving other POS settings.
+    const persistedPosStore = getFromLS<any | null>('POS_STORE', null);
+    if (persistedPosStore?.state && typeof persistedPosStore.state === 'object') {
+      saveToLS('POS_STORE', {
+        ...persistedPosStore,
+        state: { ...persistedPosStore.state, cart: [] },
+      });
+    }
+
     console.log(`✅ Device reset: ${archivedCount} transaksi dihapus (produk tidak berubah)`);
-    return {
-      archived: archivedCount,
-      remaining: 0
-    };
+    return { archived: archivedCount, remaining: 0 };
   }
 
-  // If keepDays is -1, keep only TODAY's transactions
+  let shouldKeep: (transaction: any) => boolean;
+
   if (keepDays === -1) {
-    const todayStr = new Date().toISOString().split('T')[0];
-    const todayTransactions = transactions.filter(t => {
-      const txDate = t.date?.split('T')[0] || '';
-      return txDate === todayStr;
-    });
-    const transactionsToDelete = transactions.filter(t => {
-      const txDate = t.date?.split('T')[0] || '';
-      return txDate !== todayStr;
-    });
-    // Return stock for deleted transactions
-    returnStockForTransactions(transactionsToDelete);
-    const archivedCount = transactionsToDelete.length;
-    await saveTransactionsAsync(todayTransactions);
-    return {
-      archived: archivedCount,
-      remaining: todayTransactions.length
+    // Keep only the user's local calendar day. Invalid dates are retained for safety.
+    shouldKeep = (transaction) => {
+      const txDate = getTransactionLocalDate(transaction.date);
+      return txDate === null || txDate === todayStr;
+    };
+  } else if (keepDays === -2) {
+    // "Sisakan Bulan Ini": remove only dates before the current calendar month.
+    // Current/future dates and invalid records are retained rather than guessed as old.
+    shouldKeep = (transaction) => {
+      const txDate = getTransactionLocalDate(transaction.date);
+      return txDate === null || txDate >= currentMonthStart;
+    };
+  } else {
+    const cutoffDate = new Date(now);
+    cutoffDate.setDate(cutoffDate.getDate() - keepDays);
+    const cutoffStr = formatLocalDate(cutoffDate);
+
+    shouldKeep = (transaction) => {
+      const txDate = getTransactionLocalDate(transaction.date);
+      return txDate === null || txDate >= cutoffStr;
     };
   }
 
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - keepDays);
-  const cutoffStr = cutoffDate.toISOString().split('T')[0];
+  const retainedTransactions = transactions.filter(shouldKeep);
+  const archivedCount = transactions.length - retainedTransactions.length;
 
-  const recentTransactions = transactions.filter(t => {
-    const txDate = t.date?.split('T')[0] || '';
-    return txDate >= cutoffStr;
-  });
-
-  const transactionsToDelete = transactions.filter(t => {
-    const txDate = t.date?.split('T')[0] || '';
-    return txDate < cutoffStr;
-  });
-
-  // Return stock for deleted transactions
-  returnStockForTransactions(transactionsToDelete);
-
-  const archivedCount = transactionsToDelete.length;
-
-  await saveTransactionsAsync(recentTransactions);
+  await saveTransactionsAsync(retainedTransactions);
 
   return {
     archived: archivedCount,
-    remaining: recentTransactions.length
+    remaining: retainedTransactions.length,
   };
 }
 

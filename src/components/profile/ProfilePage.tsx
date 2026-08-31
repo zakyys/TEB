@@ -948,19 +948,11 @@ const ProfilePage = () => {
                 <div className="grid grid-cols-2 gap-2">
                   <Button
                     variant="outline"
-                    className="bg-yellow-50 hover:bg-yellow-100 border-yellow-200 text-yellow-700"
-                    onClick={() => { setArchiveDays(30); setShowArchiveConfirm(true); }}
+                    className="col-span-2 bg-orange-50 hover:bg-orange-100 border-orange-200 text-orange-700"
+                    onClick={() => { setArchiveDays(-2); setShowArchiveConfirm(true); }}
                   >
                     <Trash2 className="h-4 w-4 mr-1" />
-                    &gt;30 hari
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="bg-orange-50 hover:bg-orange-100 border-orange-200 text-orange-700"
-                    onClick={() => { setArchiveDays(60); setShowArchiveConfirm(true); }}
-                  >
-                    <Trash2 className="h-4 w-4 mr-1" />
-                    &gt;60 hari
+                    Sisakan Bulan Ini
                   </Button>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -1195,17 +1187,24 @@ const ProfilePage = () => {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {archiveDays === 0 ? "⚠️ Hapus SEMUA Transaksi & Hutang?" :
-                archiveDays === -1 ? "🗑️ Hapus Kecuali Hari Ini?" :
-                  `Hapus Transaksi > ${archiveDays} Hari?`}
+              {archiveDays === 0 ? "⚠️ Hapus SEMUA Transaksi & Data Operasional?" :
+                archiveDays === -2 ? "🗑️ Sisakan Transaksi Bulan Ini?" :
+                  archiveDays === -1 ? "🗑️ Hapus Kecuali Hari Ini?" :
+                    `Hapus Transaksi > ${archiveDays} Hari?`}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {archiveDays === 0 ? (
                 <>
                   <span className="text-red-600 font-bold">PERINGATAN: </span>
-                  Tindakan ini akan menghapus SEMUA transaksi, catatan, dan daftar hutang.
+                  Tindakan ini akan menghapus SEMUA transaksi, catatan, daftar hutang, visitor log, data tukar/refund, dan catatan pembelian.
                   <br /><br />
-                  Data TIDAK BISA dikembalikan!
+                  Produk dan stok tetap tersimpan, tetapi data TIDAK BISA dikembalikan!
+                </>
+              ) : archiveDays === -2 ? (
+                <>
+                  Tindakan ini akan menghapus semua transaksi <span className="font-bold">sebelum bulan ini</span>.
+                  <br /><br />
+                  Stok tidak diubah dan catatan terkait tetap tersimpan.
                 </>
               ) : archiveDays === -1 ? (
                 <>
@@ -1246,27 +1245,33 @@ const ProfilePage = () => {
             <AlertDialogCancel>Batal</AlertDialogCancel>
             <AlertDialogAction
               onClick={async () => {
-                const result = await archiveOldTransactions(archiveDays);
+                try {
+                  const result = await archiveOldTransactions(archiveDays);
 
-                if (archiveDays === 0) {
-                  // Device reset - reload page
-                  alert(`✅ Device berhasil dibersihkan!\n${result.archived.toLocaleString()} transaksi dihapus.\n\nProduk tetap tersimpan.\nHalaman akan dimuat ulang.`);
-                  window.location.reload();
-                } else {
-                  alert(`✅ Berhasil menghapus ${result.archived.toLocaleString()} transaksi.\nTersisa ${result.remaining.toLocaleString()} transaksi.`);
-                  setStorageInfo(getStorageInfo());
-                  getTransactionStats().then(stats => setTxStats(stats));
-                  // Refresh IndexedDB stats
-                  const txCount = await getTransactionsCount();
-                  const allTx = await getAllTransactions();
-                  const itemCount = allTx.reduce((sum: number, t: any) => sum + (t.items?.length || 0), 0);
-                  setDbStats(prev => ({ ...prev, txCount, itemCount }));
+                  if (archiveDays === 0) {
+                    // Operational reset - reload page
+                    alert(`✅ Data operasional berhasil dibersihkan!\n${result.archived.toLocaleString()} transaksi dihapus.\n\nProduk dan stok tetap tersimpan.\nHalaman akan dimuat ulang.`);
+                    window.location.reload();
+                  } else {
+                    alert(`✅ Berhasil menghapus ${result.archived.toLocaleString()} transaksi.\nTersisa ${result.remaining.toLocaleString()} transaksi.`);
+                    setStorageInfo(getStorageInfo());
+                    getTransactionStats().then(stats => setTxStats(stats));
+                    // Refresh IndexedDB stats
+                    const txCount = await getTransactionsCount();
+                    const allTx = await getAllTransactions();
+                    const itemCount = allTx.reduce((sum: number, t: any) => sum + (t.items?.length || 0), 0);
+                    setDbStats(prev => ({ ...prev, txCount, itemCount }));
+                    setShowArchiveStep2(false);
+                  }
+                } catch (error: any) {
+                  console.error("Archive transactions error:", error);
                   setShowArchiveStep2(false);
+                  alert(`❌ Gagal menghapus transaksi: ${error?.message || "Terjadi kesalahan penyimpanan"}`);
                 }
               }}
               className={archiveDays === 0 ? "bg-red-600 hover:bg-red-700" : "bg-orange-500 hover:bg-orange-600"}
             >
-              {archiveDays === 0 ? "YA, BERSIHKAN DEVICE" : "Ya, Hapus"}
+              {archiveDays === 0 ? "YA, HAPUS DATA OPERASIONAL" : "Ya, Hapus"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
