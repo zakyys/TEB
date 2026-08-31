@@ -819,7 +819,8 @@ const ProfilePage = () => {
           case 'BK': category = 'BK'; break;
           case 'TL': category = 'TL'; break;
           case 'KG': category = 'KG'; break;
-          default: category = 'Lainnya'; break;
+          case 'BT': category = 'BT'; break;
+          default: category = 'NO KATEGORI'; break;
         }
         const itemTotal = item.quantity * item.price;
         historicalCategorySalesMap[category] = (historicalCategorySalesMap[category] || 0) + itemTotal;
@@ -1350,7 +1351,7 @@ const ProfilePage = () => {
                     try {
                       // Mengirim perintah untuk setup sheet & header secara otomatis
                       await fetch(tempProductGasUrl + "?action=setupProductSheet", { method: "GET", mode: "no-cors" });
-                      alert("✅ Database Produk Berhasil Disiapkan!\n\nSistem telah meminta script membuat sheet:\n• BA\n• BG\n• BK\n• KG\n• TL\n• ALL PRODUK\n• MASTER\n\nSilakan cek Spreadsheet Database Produk Anda. Jika belum berubah, pastikan URL ini adalah deployment gas-product-database.gs dan cek menu Executions di Apps Script.");
+                      alert("✅ Database Produk Berhasil Disiapkan!\n\nSistem telah meminta script membuat sheet:\n• BA\n• BG\n• BK\n• KG\n• TL\n• BT (BAUT TRUCK)\n• NO KATEGORI (kode asing)\n• ALL PRODUK\n• MASTER\n\nSilakan cek Spreadsheet Database Produk Anda. Jika belum berubah, pastikan URL ini adalah deployment gas-product-database.gs dan cek menu Executions di Apps Script.");
                     } catch (e) {
                       alert("❌ Gagal mengakses server Google.");
                     }

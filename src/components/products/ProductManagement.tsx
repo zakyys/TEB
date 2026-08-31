@@ -125,6 +125,21 @@ const BarcodeScanner = ({ onDetected }: { onDetected: (code: string) => void }) 
 
 import ProfitAnalysis from "./ProfitAnalysis";
 
+const CATEGORY_LABELS: Record<string, string> = {
+  BA: 'BAUT OTOMOTIF',
+  BG: 'BAUT GENERAL',
+  BK: 'BAUT KAYU',
+  KG: 'KILOGRAM',
+  TL: 'TOOLS',
+  BT: 'BAUT TRUCK',
+  'NO KATEGORI': 'NO KATEGORI',
+};
+
+const getCategoryFromSku = (sku: string): string => {
+  const prefix = String(sku || '').trim().split('-')[0].toUpperCase();
+  return CATEGORY_LABELS[prefix] || 'NO KATEGORI';
+};
+
 const ProductManagement = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
@@ -210,19 +225,6 @@ const ProductManagement = () => {
         return;
       }
 
-      // Auto-detect kategori dari prefix kode
-      const getCategoryFromCode = (code: string): string => {
-        const prefix = code.substring(0, 2).toUpperCase();
-        switch (prefix) {
-          case 'BA': return 'BAUT OTOMOTIF';
-          case 'BG': return 'BAUT GENERAL';
-          case 'BK': return 'BAUT KAYU';
-          case 'KG': return 'KILOGRAM';
-          case 'TL': return 'TOOLS';
-          default: return 'UMUM';
-        }
-      };
-
       const parseSheetNumber = (value: unknown, field: string, sku: string): number => {
         if (value === null || value === undefined || String(value).trim() === '') return 0;
         const parsed = Number(value);
@@ -248,7 +250,7 @@ const ProductManagement = () => {
         return {
           sku,
           name,
-          category: getCategoryFromCode(sku),
+          category: getCategoryFromSku(sku),
           price: parseSheetNumber(sheetProd.hargaJual, 'Harga Jual', sku || '(kosong)'),
           purchasePrice: parseSheetNumber(sheetProd.hargaBeli, 'Harga Beli', sku || '(kosong)'),
           stock: parseSheetNumber(sheetProd.stok, 'Stok', sku || '(kosong)'),
@@ -543,17 +545,7 @@ const ProductManagement = () => {
   const saveNewProduct = () => {
     // Auto-set category from SKU prefix
     const normalizedSku = (newProduct.sku || '').trim().toUpperCase();
-    const prefix = normalizedSku.substring(0, 2);
-    const autoCategory = (() => {
-      switch (prefix) {
-        case 'BG': return 'BG';
-        case 'BA': return 'BA';
-        case 'BK': return 'BK';
-        case 'TL': return 'TL';
-        case 'KG': return 'KG';
-        default: return 'Lainnya';
-      }
-    })();
+    const autoCategory = getCategoryFromSku(normalizedSku);
     newProduct.category = autoCategory;
 
     const normalizedName = (newProduct.name || '').trim().toUpperCase();
@@ -800,7 +792,7 @@ const ProductManagement = () => {
 
           {/* Quick Prefix Filters - Lebih besar */}
           <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-            {["all", "BG", "BA", "TL", "KG", "BK"].map((prefix) => {
+            {["all", "BG", "BA", "TL", "KG", "BK", "BT", "NO KATEGORI"].map((prefix) => {
               const isActive = selectedPrefix === prefix;
 
               const activeColorMap: Record<string, string> = {
@@ -810,6 +802,8 @@ const ProductManagement = () => {
                 TL: "bg-purple-600 text-white border-purple-600",
                 KG: "bg-orange-600 text-white border-orange-600",
                 BK: "bg-yellow-600 text-white border-yellow-600",
+                BT: "bg-cyan-600 text-white border-cyan-600",
+                "NO KATEGORI": "bg-gray-700 text-white border-gray-700",
               };
 
               return (
@@ -913,17 +907,7 @@ const ProductManagement = () => {
             {newProduct.sku && (
               <div className="mb-1">
                 <span className="text-sm font-bold text-blue-500 block">
-                  {(() => {
-                    const prefix = (newProduct.sku || '').substring(0, 2).toUpperCase();
-                    switch (prefix) {
-                      case 'BG': return 'BAUT GENERAL';
-                      case 'BA': return 'BAUT OTOMOTIF';
-                      case 'BK': return 'BAUT KAYU';
-                      case 'TL': return 'TOOL';
-                      case 'KG': return 'KILOGRAM';
-                      default: return 'Lainnya';
-                    }
-                  })()}
+                  {getCategoryFromSku(newProduct.sku || '')}
                 </span>
               </div>
             )}
@@ -932,7 +916,7 @@ const ProductManagement = () => {
               <Label htmlFor="sku" className="text-sm font-semibold text-gray-700">KODE PRODUK</Label>
               <Input
                 id="sku"
-                placeholder="Contoh: TL-0001"
+                placeholder="Contoh: BT-0001"
                 value={newProduct.sku}
                 onChange={(e) => handleNewProductChange("sku", e.target.value)}
                 className="font-mono text-lg"
@@ -1041,17 +1025,7 @@ const ProductManagement = () => {
                 {/* Kategori auto-detect + KODE */}
                 <div className="space-y-1">
                   <span className="text-xs font-bold text-blue-500">
-                    {(() => {
-                      const prefix = (selectedProduct.sku || '').substring(0, 2).toUpperCase();
-                      switch (prefix) {
-                        case 'BG': return 'BAUT GENERAL';
-                        case 'BA': return 'BAUT OTOMOTIF';
-                        case 'BK': return 'BAUT KAYU';
-                        case 'TL': return 'TOOL';
-                        case 'KG': return 'KILOGRAM';
-                        default: return 'Lainnya';
-                      }
-                    })()}
+                    {getCategoryFromSku(selectedProduct.sku || '')}
                   </span>
                   <div className="space-y-1">
                     <Label htmlFor="edit-sku" className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">KODE</Label>
@@ -1173,7 +1147,8 @@ const ProductManagement = () => {
                   <p>→ BK = BAUT KAYU</p>
                   <p>→ KG = KILOGRAM</p>
                   <p>→ TL = TOOLS</p>
-                  <p>→ Lainnya = UMUM</p>
+                  <p>→ BT = BAUT TRUCK</p>
+                   <p>→ Prefix lain = NO KATEGORI (contoh: ZZ-001)</p>
                 </div>
               </div>
             </div>
@@ -1189,6 +1164,8 @@ const ProductManagement = () => {
                   ['BK-300', 'BAUT KAYU 4X40', 1500, 3000, 150],
                   ['KG-001', 'PAKU KILOGRAM', 18000, 25000, 50],
                   ['TL-001', 'OBENG PLUS', 25000, 35000, 30],
+                  ['BT-001', 'BAUT TRUCK M12', 8000, 12000, 20],
+                  ['ZZ-001', 'BARANG LAIN', 1000, 2000, 5],
                 ];
                 const ws = XLSX.utils.aoa_to_sheet(ws_data);
                 ws['!cols'] = [
@@ -1216,19 +1193,6 @@ const ProductManagement = () => {
                 onChange={async (e) => {
                   const file = e.target.files?.[0];
                   if (!file) return;
-
-                  // Function to auto-detect category from code prefix
-                  const getCategoryFromCode = (code: string): string => {
-                    const prefix = code.substring(0, 2).toUpperCase();
-                    switch (prefix) {
-                      case 'BA': return 'BAUT OTOMOTIF';
-                      case 'BG': return 'BAUT GENERAL';
-                      case 'BK': return 'BAUT KAYU';
-                      case 'KG': return 'KILOGRAM';
-                      case 'TL': return 'TOOLS';
-                      default: return 'UMUM';
-                    }
-                  };
 
                   let imported: Product[] = [];
 
@@ -1302,7 +1266,7 @@ const ProductManagement = () => {
                       return {
                         id: `P-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                         name,
-                        category: getCategoryFromCode(kode),
+                        category: getCategoryFromSku(kode),
                         sku: kode,
                         purchasePrice,
                         price,

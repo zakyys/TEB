@@ -34,6 +34,7 @@ Aplikasi memiliki menu utama di bagian bawah layar:
 - SKU/KODE dan nama wajib diisi; SKU duplikat dan harga tidak valid akan ditolak.
 - **Stok boleh negatif** dan akan disimpan apa adanya.
 - Import meng-update produk dengan SKU yang sama dan menambahkan SKU baru.
+- Kategori otomatis berdasarkan prefix SKU: `BA` BAUT OTOMOTIF, `BG` BAUT GENERAL, `BK` BAUT KAYU, `KG` KILOGRAM, `TL` TOOLS, `BT` BAUT TRUCK. Prefix asing masuk ke `NO KATEGORI` di aplikasi dan Google Sheet.
 
 ---
 

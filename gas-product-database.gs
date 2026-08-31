@@ -4,7 +4,7 @@
  * Gunakan file ini pada deployment URL GAS Database Produk.
  *
  * Sheet yang dikelola:
- *   BA, BG, BK, KG, TL, ALL PRODUK, MASTER
+ *   BA, BG, BK, KG, TL, BT, NO KATEGORI, ALL PRODUK, MASTER
  *
  * Layout sheet kategori:
  *   Row 1: Terakhir Upload
@@ -15,7 +15,8 @@
  * Jangan digabung dengan gas-report-transactions.gs.
  */
 
-var CATEGORY_SHEETS = ["BA", "BG", "BK", "KG", "TL"];
+var CATEGORY_SHEETS = ["BA", "BG", "BK", "KG", "TL", "BT", "NO KATEGORI"];
+var KNOWN_CATEGORY_PREFIXES = ["BA", "BG", "BK", "KG", "TL", "BT"];
 var ALL_SHEET = "ALL PRODUK";
 var PASTE_SHEET = "MASTER";
 var BACKUP_SHEET = "_BACKUP";
@@ -68,7 +69,7 @@ function setupTriggers() {
 
     SpreadsheetApp.getUi().alert(
         "✅ Setup Berhasil!",
-        "Auto-sync sudah aktif!\n\nSekarang jika Anda menghapus baris di sheet kategori (BA/BG/BK/KG/TL), ALL PRODUK akan otomatis ter-update.\n\n⚠️ Tidak perlu jalankan ini lagi.",
+        "Auto-sync sudah aktif!\n\nSekarang jika Anda menghapus baris di sheet kategori (BA/BG/BK/KG/TL/BT/NO KATEGORI), ALL PRODUK akan otomatis ter-update.\n\n⚠️ Tidak perlu jalankan ini lagi.",
         SpreadsheetApp.getUi().ButtonSet.OK
     );
 }
@@ -89,9 +90,11 @@ function onSheetChange(e) {
 }
 
 function getSheetNameFromCode(kode) {
-    var prefix = String(kode).substring(0, 2).toUpperCase();
-    if (CATEGORY_SHEETS.indexOf(prefix) >= 0) return prefix;
-    return "BG";
+    var prefix = String(kode || '').trim().split('-')[0].toUpperCase();
+    // Prefix resmi mendapat sheet kategori sendiri. Kode lain masuk ke
+    // penampung eksplisit agar tidak tercampur dengan BAUT GENERAL.
+    if (KNOWN_CATEGORY_PREFIXES.indexOf(prefix) >= 0) return prefix;
+    return "NO KATEGORI";
 }
 
 function doGet(e) {
@@ -122,7 +125,7 @@ function doGet(e) {
             formatPasteSheet(pasteSheet);
             pasteSheet.setTabColor("#4CAF50");
 
-            return createJsonResponse({ success: true, message: "Setup Berhasil! Sheet BA, BG, BK, KG, TL, ALL PRODUK, dan PASTE DARI EXCEL sudah dibuat." });
+            return createJsonResponse({ success: true, message: "Setup Berhasil! Sheet BA, BG, BK, KG, TL, BT, NO KATEGORI, ALL PRODUK, dan PASTE DARI EXCEL sudah dibuat." });
         } catch (err) {
             return createJsonResponse({ success: false, error: err.toString() });
         }
@@ -485,7 +488,7 @@ function rebuildAllSheet(ss) {
         allSheet.getRange(DATA_START_ROW, 1, allSheet.getLastRow() - DATA_START_ROW + 1, 6).clearContent();
     }
 
-    // Kumpulkan semua data dari 5 sheet kategori
+    // Kumpulkan semua data dari seluruh sheet kategori
     var allData = [];
     CATEGORY_SHEETS.forEach(function (name) {
         var sheet = ss.getSheetByName(name);
@@ -535,7 +538,7 @@ function rebuildAllSheet(ss) {
 // Proteksi sheet ALL PRODUK agar tidak bisa diedit manual
 function protectAllSheet(sheet) {
     var protection = sheet.protect();
-    protection.setDescription("⚠️ JANGAN EDIT DI SINI! Edit harga/stok di sheet kategori (BA, BG, BK, KG, TL)");
+    protection.setDescription("⚠️ JANGAN EDIT DI SINI! Edit harga/stok di sheet kategori (BA, BG, BK, KG, TL, BT, NO KATEGORI)");
     protection.setWarningOnly(true); // Tampilkan warning tapi tetap bisa diedit (tanpa perlu manage editors)
 }
 
@@ -795,7 +798,7 @@ function backupAllData(ss) {
     backupSheet.hideSheet(); // Sembunyikan sheet backup
 
     var allData = [];
-    // Kumpulkan semua data dari 5 sheet kategori
+    // Kumpulkan semua data dari seluruh sheet kategori
     CATEGORY_SHEETS.forEach(function (name) {
         var sheet = ss.getSheetByName(name);
         if (!sheet || sheet.getLastRow() < DATA_START_ROW) return;

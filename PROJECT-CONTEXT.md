@@ -139,7 +139,7 @@ Upload massal dari aplikasi mengikuti pola lama: payload ditulis dahulu ke `MAST
 
 Sheet database produk:
 
-- kategori: `BA`, `BG`, `BK`, `KG`, `TL`;
+- kategori: `BA`, `BG`, `BK`, `KG`, `TL`, `BT`, `NO KATEGORI`;
 - agregat: `ALL PRODUK`;
 - konfigurasi: `MASTER`;
 - sheet kategori: data dimulai dari baris 4; kolom utama: KODE, Nama, Harga Beli, Harga Jual, Stok.
@@ -154,7 +154,7 @@ Sheet database produk:
 
 ## 7. Alur produk dan stok
 
-1. App start: `App.tsx` menjalankan `initProductCache()`, lalu `initStockSync()`.
+1. App start: `App.tsx` menjalankan `initProductCache()`, lalu `initProductSync()` dan `initStockSync()`.
 2. POS menyelesaikan transaksi lewat `completeTransactionUtil()`.
 3. `completeTransactionUtil()` mengurangi stok tanpa clamp, menyimpan transaksi, dan memperbarui cache.
 4. POS/Cart mengirim stok terbaru via `pushStockToSheet()`.
@@ -164,6 +164,7 @@ Sheet database produk:
 8. Import Excel melakukan validasi penuh dulu, baru merge ke cache. Merge berdasarkan SKU memakai `Map`.
 9. Tambah/edit produk dimasukkan ke `pos_pending_product_sync`, dikirim background, dan dicoba ulang saat aplikasi dibuka atau koneksi kembali.
 10. Status background product/stock sync dikirim lewat event `pos:background-sync` dan ditampilkan sebagai ticker global di bagian atas aplikasi. Status sukses hilang otomatis setelah 800 ms.
+11. Kategori resmi SKU: `BA`, `BG`, `BK`, `KG`, `TL`, `BT` (Baut Truck). Semua prefix/kode asing masuk ke kategori `NO KATEGORI`, baik di aplikasi maupun sheet GAS.
 
 ## 8. Perubahan terakhir yang sudah dilakukan
 
@@ -226,7 +227,7 @@ git status --short --branch
 - [ ] URL laporan hanya dipakai untuk laporan/transaksi.
 - [ ] URL produk hanya dipakai untuk setup, get products, upload, dan stok.
 - [ ] `?action=getProducts` mengembalikan JSON `success: true`.
-- [ ] Upload 5.000 produk berhasil dan sheet kategori terisi.
+- [ ] Upload 5.000 produk berhasil dan sheet kategori terisi, termasuk `BT` dan `NO KATEGORI` untuk prefix asing.
 - [ ] Cek `ALL PRODUK` setelah bulk upload/stock update.
 - [ ] Deploy ulang GAS setiap kali file `.gs` berubah.
 

@@ -112,13 +112,15 @@ BG
 BK
 KG
 TL
+BT
+NO KATEGORI
 ALL PRODUK
 MASTER
 ```
 
 Struktur sheet produk:
 
-- Sheet kategori (`BA`, `BG`, `BK`, `KG`, `TL`): baris 1 waktu upload terakhir, baris 2 waktu sinkronisasi kasir terakhir, baris 3 header kolom, baris 4 dan seterusnya data produk.
+- Sheet kategori (`BA`, `BG`, `BK`, `KG`, `TL`, `BT`, `NO KATEGORI`): baris 1 waktu upload terakhir, baris 2 waktu sinkronisasi kasir terakhir, baris 3 header kolom, baris 4 dan seterusnya data produk. `BT` adalah Baut Truck; kode dengan prefix lain masuk ke `NO KATEGORI`.
 - Sheet `MASTER`: baris 1 status, baris 2 header, baris 3 instruksi, baris 4 checkbox Undo, baris 5 dan seterusnya area paste.
 
 **Alur upload:** aplikasi menulis data ke `MASTER` terlebih dahulu, kemudian menjalankan processor yang sama dengan paste manual. Processor membackup data lama ke `_BACKUP`, mendistribusikan produk berdasarkan prefix SKU ke sheet kategori, rebuild `ALL PRODUK`, lalu membersihkan area data `MASTER`.
@@ -144,7 +146,7 @@ Lakukan satu kali saja. Trigger ini membantu memperbarui `ALL PRODUK` ketika bar
 Gunakan aplikasi POS atau sheet kategori:
 
 ```text
-BA / BG / BK / KG / TL
+BA / BG / BK / KG / TL / BT / NO KATEGORI
 ```
 
 Setelah perubahan dari sheet, jalankan **Sync Sheet** di aplikasi.
@@ -252,7 +254,7 @@ Deploy ulang menggunakan `gas-product-database.gs`.
 
 1. Pastikan URL database produk sudah disimpan.
 2. Pastikan sheet kategori berisi data mulai dari baris 4.
-3. Pastikan KODE produk memiliki prefix yang sesuai: `BA`, `BG`, `BK`, `KG`, atau `TL`.
+3. Pastikan KODE produk memakai prefix yang dikenali (`BA`, `BG`, `BK`, `KG`, `TL`, atau `BT`). Prefix lain tidak ditolak, tetapi otomatis masuk ke sheet `NO KATEGORI`.
 4. Pastikan Apps Script database produk sudah dideploy ulang.
 5. Cek **Executions** di Apps Script untuk melihat error.
 

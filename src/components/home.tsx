@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -423,7 +423,7 @@ const Dashboard = () => {
       });
     });
 
-    const sortOrder = ["BG", "BA", "TL", "KG", "BK"];
+    const sortOrder = ["BG", "BA", "TL", "KG", "BK", "BT", "NO KATEGORI"];
     return Object.entries(summary)
       .map(([prefix, count]) => ({ prefix, qty: count }))
       .sort((a, b) => {
@@ -1068,7 +1068,8 @@ const Dashboard = () => {
             case 'BK': category = 'BK'; break;
             case 'TL': category = 'TL'; break;
             case 'KG': category = 'KG'; break;
-            default: category = 'Lainnya'; break;
+            case 'BT': category = 'BT'; break;
+            default: category = 'NO KATEGORI'; break;
           }
           const itemTotal = item.quantity * item.price;
           categorySalesMap[category] = (categorySalesMap[category] || 0) + itemTotal;
