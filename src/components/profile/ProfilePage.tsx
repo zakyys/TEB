@@ -84,8 +84,10 @@ const ProfilePage = () => {
   const [storageInfo, setStorageInfo] = useState<{ used: number; total: number; usedPercent: number }>({ used: 0, total: 5242880, usedPercent: 0 });
   const [txStats, setTxStats] = useState<{ total: number; thisMonth: number; lastMonth: number; older: number; txCount: number }>({ total: 0, thisMonth: 0, lastMonth: 0, older: 0, txCount: 0 });
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
-  const [archiveDays, setArchiveDays] = useState(60);
+  const [archiveDays, setArchiveDays] = useState(-2);
   const [showArchiveStep2, setShowArchiveStep2] = useState(false);
+  const [archiveBackupReady, setArchiveBackupReady] = useState(false);
+  const [archiveBackupInProgress, setArchiveBackupInProgress] = useState(false);
   const [sendingTelegramBackup, setSendingTelegramBackup] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -949,7 +951,7 @@ const ProfilePage = () => {
                   <Button
                     variant="outline"
                     className="col-span-2 bg-orange-50 hover:bg-orange-100 border-orange-200 text-orange-700"
-                    onClick={() => { setArchiveDays(-2); setShowArchiveConfirm(true); }}
+                    onClick={() => { setArchiveDays(-2); setArchiveBackupReady(false); setShowArchiveConfirm(true); }}
                   >
                     <Trash2 className="h-4 w-4 mr-1" />
                     Sisakan Bulan Ini
@@ -959,14 +961,14 @@ const ProfilePage = () => {
                   <Button
                     variant="outline"
                     className="bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-700"
-                    onClick={() => { setArchiveDays(-1); setShowArchiveConfirm(true); }}
+                    onClick={() => { setArchiveDays(-1); setArchiveBackupReady(false); setShowArchiveConfirm(true); }}
                   >
                     <Trash2 className="h-4 w-4 mr-1" />
                     Sisakan Hari Ini
                   </Button>
                   <Button
                     variant="destructive"
-                    onClick={() => { setArchiveDays(0); setShowArchiveConfirm(true); }}
+                    onClick={() => { setArchiveDays(0); setArchiveBackupReady(false); setShowArchiveConfirm(true); }}
                   >
                     <Trash2 className="h-4 w-4 mr-1" />
                     Hapus Semua
@@ -1217,9 +1219,43 @@ const ProfilePage = () => {
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="rounded-md border border-blue-200 bg-blue-50 p-3">
+            <p className="mb-2 text-sm font-medium text-blue-900">
+              Backup wajib sebelum melanjutkan penghapusan.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full border-blue-300 bg-white text-blue-700 hover:bg-blue-100"
+              disabled={archiveBackupInProgress || archiveBackupReady}
+              onClick={async () => {
+                if (archiveBackupInProgress || archiveBackupReady) return;
+                setArchiveBackupInProgress(true);
+                try {
+                  await backupAllDataToFile();
+                  setArchiveBackupReady(true);
+                  alert("✅ Backup Full berhasil di-download. Tombol Lanjutkan sekarang aktif.");
+                } catch (error: any) {
+                  console.error("Archive backup error:", error);
+                  alert(`❌ Backup gagal: ${error?.message || "Gagal membuat backup lengkap"}. Penghapusan dibatalkan.`);
+                } finally {
+                  setArchiveBackupInProgress(false);
+                }
+              }}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              {archiveBackupInProgress ? "Menyiapkan Backup..." : archiveBackupReady ? "Backup Full Sudah Di-download" : "Backup Full & Download"}
+            </Button>
+            {!archiveBackupReady && (
+              <p className="mt-2 text-xs text-blue-700">
+                Klik tombol ini untuk mengunduh salinan data sebelum menghapus transaksi.
+              </p>
+            )}
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Batal</AlertDialogCancel>
             <AlertDialogAction
+              disabled={!archiveBackupReady}
               onClick={() => {
                 setShowArchiveConfirm(false);
                 setShowArchiveStep2(true);
