@@ -400,8 +400,18 @@ const Dashboard = () => {
   const yesterdayTransactions = transactions.filter(
     t => t.date.includes(yesterdayStr) && t.status !== "refunded" && t.status !== "cancelled",
   );
-  const todayTotal = todayTransactions.reduce((s, t) => s + t.total, 0);
-  const yesterdayTotal = yesterdayTransactions.reduce((s, t) => s + t.total, 0);
+  // Gunakan definisi omzet yang sama dengan file Excel Dashboard:
+  // jumlah bruto item terjual, tidak memasukkan transaksi adjustment tukar
+  // dan tidak menghitung item yang sudah direfund. Diskon ditampilkan
+  // terpisah di laporan Excel, sehingga tidak mengurangi angka omzet.
+  const getReportSalesTotal = (transactionList: Transaction[]) => transactionList
+    .filter(t => !t.id.startsWith('ADJ-') && t.customer !== 'Tukar Barang')
+    .reduce((transactionSum, t) => transactionSum + (t.items || [])
+      .filter(item => !(item as any).sameDayRefunded && !(item as any).refunded)
+      .reduce((itemSum, item) => itemSum + (Number(item.price) || 0) * (Number(item.quantity) || 0), 0), 0);
+
+  const todayTotal = getReportSalesTotal(todayTransactions);
+  const yesterdayTotal = getReportSalesTotal(yesterdayTransactions);
   let percentageIncrease = 0;
   if (yesterdayTotal > 0) percentageIncrease = Math.round(((todayTotal - yesterdayTotal) / yesterdayTotal) * 100);
   else if (todayTotal > 0) percentageIncrease = 100;
@@ -478,7 +488,7 @@ const Dashboard = () => {
     const dayTransactions = transactions.filter(
       t => t.date.includes(dateStr) && t.status !== "refunded" && t.status !== "cancelled"
     );
-    return dayTransactions.reduce((sum, t) => sum + t.total, 0);
+    return getReportSalesTotal(dayTransactions);
   });
   const buildSalesPoints = (data: number[], w = 80, h = 30) => {
     const max = Math.max(1, ...data);
