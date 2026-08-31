@@ -220,6 +220,7 @@ const Dashboard = () => {
     // Listen for transaction updates from other pages
     const handleTransactionUpdate = () => refreshData();
     window.addEventListener('pos:transaction:complete', handleTransactionUpdate);
+    window.addEventListener('pos:transaction:update', handleTransactionUpdate);
     window.addEventListener('storage', handleTransactionUpdate);
 
     // Also refresh when page becomes visible (user comes back from POS)
@@ -232,6 +233,7 @@ const Dashboard = () => {
 
     return () => {
       window.removeEventListener('pos:transaction:complete', handleTransactionUpdate);
+      window.removeEventListener('pos:transaction:update', handleTransactionUpdate);
       window.removeEventListener('storage', handleTransactionUpdate);
       document.removeEventListener('visibilitychange', handleVisibility);
     };

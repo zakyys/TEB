@@ -467,7 +467,10 @@ const TransactionHistory: React.FC = () => {
       }
 
       setTransactions(updatedTransactions);
-      safeSaveAllTransactions(updatedTransactions);
+      const saved = await safeSaveAllTransactions(updatedTransactions);
+      if (saved) {
+        window.dispatchEvent(new CustomEvent('pos:transaction:update', { detail: updatedTransactions }));
+      }
 
       // If this was a different-day refund, also delete the refund record
       if ((itemToDelete as any).refunded && !(itemToDelete as any).sameDayRefunded) {
@@ -543,7 +546,10 @@ const TransactionHistory: React.FC = () => {
     }).filter(Boolean) as Transaction[];
 
     setTransactions(updatedTransactions);
-    safeSaveAllTransactions(updatedTransactions);
+    const saved = await safeSaveAllTransactions(updatedTransactions);
+    if (saved) {
+      window.dispatchEvent(new CustomEvent('pos:transaction:update', { detail: updatedTransactions }));
+    }
 
     setDeleteConfirm(null);
     toast({
