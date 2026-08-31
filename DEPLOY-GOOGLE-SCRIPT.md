@@ -102,7 +102,7 @@ Klik **Simpan**.
 
 ## 4. Buat format sheet dari aplikasi
 
-Klik tombol **Cek** di sebelah URL database produk.
+Klik tombol **Cek** di sebelah URL database produk. Tombol ini juga dapat dipakai untuk menambahkan sheet kategori baru (`BT` dan `NO KATEGORI`) ke spreadsheet database lama.
 
 Tombol ini akan menjalankan setup otomatis dan membuat:
 
@@ -218,7 +218,7 @@ Response database produk yang benar berbentuk JSON, misalnya:
 }
 ```
 
-Untuk membuat format sheet dari browser, gunakan:
+Untuk membuat format sheet dari browser, gunakan. Ini akan membuat sheet kategori yang belum ada, termasuk `BT` dan `NO KATEGORI`, tanpa menghapus data kategori yang sudah ada:
 
 ```text
 ?action=setupProductSheet

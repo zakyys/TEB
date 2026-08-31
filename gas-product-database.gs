@@ -40,6 +40,9 @@ function onOpen() {
 // Manual rebuild ALL PRODUK (dari menu)
 function rebuildManual() {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
+    // Rebuild juga memastikan sheet kategori baru (mis. BT/NO KATEGORI)
+    // dibuat walaupun spreadsheet lama belum pernah menjalankan setup ulang.
+    ensureCategorySheets(ss);
     rebuildAllSheet(ss);
     SpreadsheetApp.getUi().alert(
         "✅ Rebuild Selesai!",
@@ -85,6 +88,7 @@ function onSheetChange(e) {
         changeType === "INSERT_COLUMN" || changeType === "REMOVE_COLUMN" ||
         changeType === "OTHER") {
         var ss = SpreadsheetApp.getActiveSpreadsheet();
+        ensureCategorySheets(ss);
         rebuildAllSheet(ss);
     }
 }
@@ -108,11 +112,7 @@ function doGet(e) {
     // ========================================
     if (action === "setupProductSheet") {
         try {
-            CATEGORY_SHEETS.forEach(function (name) {
-                var sheet = ss.getSheetByName(name);
-                if (!sheet) sheet = ss.insertSheet(name);
-                formatSheetHeaders(sheet);
-            });
+            ensureCategorySheets(ss);
 
             var allSheet = ss.getSheetByName(ALL_SHEET);
             if (!allSheet) allSheet = ss.insertSheet(ALL_SHEET);
@@ -453,6 +453,16 @@ function formatSheetHeaders(sheet) {
     }
 }
 
+// Pastikan semua sheet kategori tersedia dan memiliki format header.
+// Dipanggil oleh setup dan rebuild agar spreadsheet lama ikut bermigrasi.
+function ensureCategorySheets(ss) {
+    CATEGORY_SHEETS.forEach(function (name) {
+        var sheet = ss.getSheetByName(name);
+        if (!sheet) sheet = ss.insertSheet(name);
+        formatSheetHeaders(sheet);
+    });
+}
+
 // Update timestamp di semua sheet
 function updateTimestamp(ss, type, timestamp) {
     var row = (type === "upload") ? 1 : 2;
@@ -489,6 +499,7 @@ function rebuildAllSheet(ss) {
     }
 
     // Kumpulkan semua data dari seluruh sheet kategori
+    ensureCategorySheets(ss);
     var allData = [];
     CATEGORY_SHEETS.forEach(function (name) {
         var sheet = ss.getSheetByName(name);
