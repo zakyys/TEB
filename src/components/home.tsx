@@ -2177,6 +2177,17 @@ const Dashboard = () => {
                           <div className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1">
                             <Calendar className="h-3 w-3 text-blue-500" />
                             <span className="text-blue-600">{new Date(item.soldAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</span>
+                            {(() => {
+                              const soldDate = new Date(item.soldAt);
+                              const today = new Date();
+                              return soldDate.getFullYear() === today.getFullYear() &&
+                                soldDate.getMonth() === today.getMonth() &&
+                                soldDate.getDate() === today.getDate();
+                            })() && (
+                              <span className="ml-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
+                                Hari ini
+                              </span>
+                            )}
                           </div>
                           <div className="text-xs text-muted-foreground font-mono">{item.sku}</div>
                           <div className="font-medium text-sm truncate">{item.name}</div>

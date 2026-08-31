@@ -1,8 +1,17 @@
-﻿import type { CartItem, Product } from '@/types/pos'
+import type { CartItem, Product } from '@/types/pos'
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency } from '@/lib/utils'
 import { setProducts as setCachedProducts } from '@/lib/productCache'
 import { safeSaveTransaction, safeInitAndMigrate } from '@/lib/indexedDB'
 import type { ProfileData } from '@/types/pos'
+
+const isSameLocalDate = (value: string | Date | undefined): boolean => {
+  if (!value) return false;
+  const date = new Date(value);
+  const today = new Date();
+  return date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate();
+};
 
 export interface CompleteTxParams {
   cart: CartItem[]
@@ -112,6 +121,10 @@ export function generateTextReceipt(transactionData: any): string {
     },
   )
 
+  const receiptDate = new Date(transactionData.date);
+  const dateText = `${receiptDate.toLocaleDateString('id-ID')} ${receiptDate.toLocaleTimeString('id-ID')}`;
+  const todayText = isSameLocalDate(transactionData.date) ? ' • Hari ini' : '';
+
   let receiptContent = `
 ${(profile?.workshopName || 'BAUT - APP KASIR').padEnd(40)}
 ${(profile?.address || 'Alamat Toko').padEnd(40)}
@@ -120,7 +133,7 @@ Telp: ${(profile?.phone || 'Nomor Telepon Toko').padEnd(34)}
 ----------------------------------------
 
 No. Transaksi: ${transactionData.id}
-Tanggal: ${new Date(transactionData.date).toLocaleDateString('id-ID')} ${new Date(transactionData.date).toLocaleTimeString('id-ID')}
+Tanggal: ${dateText}${todayText}
 Pelanggan: ${transactionData.customer}
 ${transactionData.customerVehicle ? `Kendaraan: ${transactionData.customerVehicle}
 ` : ''}----------------------------------------
@@ -191,7 +204,7 @@ export function generateReceiptHtml(transactionData: any): string {
 
       <div style="margin-bottom: 15px;">
         <p style="margin: 0;">No. Transaksi: ${transactionData.id}</p>
-        <p style="margin: 0;">Tanggal: ${new Date(transactionData.date).toLocaleDateString('id-ID')} ${new Date(transactionData.date).toLocaleTimeString('id-ID')}</p>
+        <p style="margin: 0;">Tanggal: ${new Date(transactionData.date).toLocaleDateString('id-ID')} ${new Date(transactionData.date).toLocaleTimeString('id-ID')}${isSameLocalDate(transactionData.date) ? '  • HARI INI' : ''}</p>
         <p style="margin: 0;">Pelanggan: ${transactionData.customer}</p>
         ${vehicleHtml}
       </div>

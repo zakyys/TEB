@@ -1358,7 +1358,20 @@ const TransactionHistory: React.FC = () => {
                           <div className="flex justify-between items-start">
                             <div>
                               <p className="font-medium text-sm">{t.customer}</p>
-                              <p className="text-[11px] text-muted-foreground">{t.id} • {new Date(t.date).toLocaleString("id-ID")}</p>
+                              <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-1">
+                                 <span>{t.id} • {new Date(t.date).toLocaleString("id-ID")}</span>
+                                 {(() => {
+                                   const transactionDate = new Date(t.date);
+                                   const today = new Date();
+                                   return transactionDate.getFullYear() === today.getFullYear() &&
+                                     transactionDate.getMonth() === today.getMonth() &&
+                                     transactionDate.getDate() === today.getDate();
+                                 })() && (
+                                   <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
+                                     Hari ini
+                                   </span>
+                                 )}
+                               </p>
                             </div>
                             <div className="text-right">
                               <p className="font-bold text-amber-600 text-sm">{formatCurrency(t.total)}</p>
@@ -1577,6 +1590,17 @@ const TransactionHistory: React.FC = () => {
                                   <div className={`flex items-center gap-1 text-[10px] mb-1 ${getTextClass()}`}>
                                     <Calendar className={`h-3.5 w-3.5 ${getIconClass()}`} />
                                     <span>{isSelisihTukar ? 'Tanggal Tukar' : 'Tanggal Beli'}: {new Date(transaction.date).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</span>
+                                     {(() => {
+                                       const transactionDate = new Date(transaction.date);
+                                       const today = new Date();
+                                       return transactionDate.getFullYear() === today.getFullYear() &&
+                                         transactionDate.getMonth() === today.getMonth() &&
+                                         transactionDate.getDate() === today.getDate();
+                                     })() && (
+                                       <span className="ml-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
+                                         Hari ini
+                                       </span>
+                                     )}
                                   </div>
                                   <div className={`font-medium text-sm leading-tight break-words ${getNameClass()}`}>
                                     {item.name}
@@ -2257,6 +2281,11 @@ const TransactionHistory: React.FC = () => {
               const trx = selectedTransaction;
               const subtotal = trx.items.reduce((s, it) => s + it.price * it.quantity, 0);
               const dateStr = `${new Date(trx.date).toLocaleDateString('id-ID')} ${new Date(trx.date).toLocaleTimeString('id-ID')}`;
+              const transactionDate = new Date(trx.date);
+              const today = new Date();
+              const isTrxToday = transactionDate.getFullYear() === today.getFullYear() &&
+                transactionDate.getMonth() === today.getMonth() &&
+                transactionDate.getDate() === today.getDate();
               return (
                 <div className="receipt">
                   <div className="center" style={{ marginBottom: 8 }}>
@@ -2267,7 +2296,10 @@ const TransactionHistory: React.FC = () => {
 
                   <div style={{ marginBottom: 8 }}>
                     <p>No. Transaksi: {trx.id}</p>
-                    <p>Tanggal: {dateStr}</p>
+                    <p>
+                      Tanggal: {dateStr}
+                      {isTrxToday && <span className="today-badge">Hari ini</span>}
+                    </p>
                     <p>Pelanggan: {trx.customer}</p>
                   </div>
 

@@ -691,7 +691,22 @@ const CartScreen = () => {
             <div className="relative">
               <div className="absolute inset-0 bg-gradient-to-b from-white/80 to-white/20 dark:from-gray-900/80 dark:to-gray-900/20 pointer-events-none rounded-lg" />
               <ScrollArea className="max-h-48 sm:max-h-64 w-full rounded-lg border bg-gray-50 dark:bg-gray-800 p-2 sm:p-4 mb-2">
-                <pre className="text-xs sm:text-sm whitespace-pre-wrap break-words">{receiptContent}</pre>
+                <div className="font-mono text-xs sm:text-sm whitespace-pre-wrap break-words">
+                 {receiptContent.split("\n").map((line, index) => {
+                   const isTodayLine = line.includes("• Hari ini") || line.includes("• HARI INI");
+                   if (line.trimStart().startsWith("Tanggal:") && isTodayLine) {
+                     return (
+                       <div key={index} className="flex flex-wrap items-center gap-1">
+                         <span>{line.replace(/\s*•\s*(Hari ini|HARI INI)\s*$/, "")}</span>
+                         <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
+                           Hari ini
+                         </span>
+                       </div>
+                     );
+                   }
+                   return line ? <div key={index}>{line}</div> : <br key={index} />;
+                 })}
+               </div>
               </ScrollArea>
             </div>
             <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:gap-3 pt-2 px-1 sm:px-0 pb-2">
