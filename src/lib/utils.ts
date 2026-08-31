@@ -137,8 +137,10 @@ export async function restoreData(backupString: string): Promise<void> {
 }
 
 // Backup products only as downloadable JSON file
-export function backupProductsToFile(): void {
+export async function backupProductsToFile(): Promise<void> {
   try {
+    // Ensure the latest in-memory product/stock changes are durable before export.
+    await flushProductCache();
     const products = getProducts();
     const backupData = {
       type: "products-only",
@@ -163,7 +165,8 @@ export function backupProductsToFile(): void {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // Give the browser time to start the download before releasing the Blob URL.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) {
     console.error("Error backing up products:", error);
     throw new Error("Gagal membuat backup produk");

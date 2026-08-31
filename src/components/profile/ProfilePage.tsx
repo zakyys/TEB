@@ -177,9 +177,9 @@ const ProfilePage = () => {
     }
   };
 
-  const handleBackupProducts = () => {
+  const handleBackupProducts = async () => {
     try {
-      backupProductsToFile();
+      await backupProductsToFile();
       alert("Backup produk berhasil diunduh!");
     } catch (error) {
       alert("Gagal membuat backup produk");
