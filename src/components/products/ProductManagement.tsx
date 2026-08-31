@@ -730,6 +730,10 @@ const ProductManagement = () => {
             )}
           </div>
 
+          <p className="-mt-2 px-1 text-[11px] text-muted-foreground">
+            Total produk: <span className="font-semibold text-foreground">{products.filter((product) => product.type === 'product').length.toLocaleString('id-ID')}</span>
+          </p>
+
           {/* Tombol aksi - grid 3x2 kompak tapi lebih besar */}
           <div className="grid grid-cols-3 gap-2">
             <Button

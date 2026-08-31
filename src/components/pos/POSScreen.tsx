@@ -497,7 +497,7 @@ const POSScreen = () => {
             />
           )}
 
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center gap-2 mb-1">
             {/* Search Bar - Elongated */}
             <div className="relative flex-1 max-w-lg">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-500" />
@@ -539,8 +539,9 @@ const POSScreen = () => {
               <span>{isScanning ? "TUTUP" : "SCAN"}</span>
             </Button>
           </div>
-
-
+          <p className="mb-3 px-1 text-[11px] text-muted-foreground">
+            Total produk: <span className="font-semibold text-foreground">{products.filter((product) => product.type === 'product').length.toLocaleString('id-ID')}</span>
+          </p>
 
           <ScrollArea className="flex-1 pr-2">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
