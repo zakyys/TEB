@@ -1753,18 +1753,18 @@ const TransactionHistory: React.FC = () => {
                                       </Button>
                                     )
                                   ) : (
-                                    // Normal mode - show edit and delete buttons
+                                    // Normal mode - show delete button only
                                     <div className="flex items-center gap-1">
                                       <div className="flex flex-col items-center">
                                         <Button
                                           size="sm"
                                           variant="ghost"
-                                          className="h-7 w-7 p-0 text-blue-500 hover:text-blue-700 hover:bg-blue-50"
+                                          className="hidden h-7 w-7 p-0 text-blue-500 hover:text-blue-700 hover:bg-blue-50"
                                           onClick={() => setEditingItem({ transactionId: transaction.id, itemIndex, currentQty: item.quantity })}
                                         >
                                           <Pencil className="h-4 w-4" />
                                         </Button>
-                                        <span className="text-[8px] text-blue-400 -mt-1">QTY</span>
+                                        <span className="hidden text-[8px] text-blue-400 -mt-1">QTY</span>
                                       </div>
                                       <Button
                                         size="sm"
