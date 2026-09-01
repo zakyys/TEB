@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { getFromLS, saveToLS, LS_KEYS, formatCurrency, getStoreName, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
+import { getFromLS, saveToLS, LS_KEYS, formatCurrency, getRelativeDateBadgeClass, getStoreName, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
 import { getProducts as getCachedProducts, setProducts as setCachedProducts, pushStockToSheet } from "@/lib/productCache";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -999,7 +999,7 @@ const POSScreen = () => {
                        return (
                          <div key={index} className="flex flex-wrap items-center gap-1">
                            <span>{line.replace(/\s*•\s*(Hari ini|HARI INI|Kemarin|2 Hari Lalu|3 Hari Lalu)\s*$/, "")}</span>
-                           <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
+                           <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${getRelativeDateBadgeClass(relativeDateBadge === "HARI INI" ? "Hari ini" : relativeDateBadge)}`}>
                              {relativeDateBadge === "HARI INI" ? "Hari ini" : relativeDateBadge}
                            </span>
                          </div>

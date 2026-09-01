@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getFromLS, saveToLS, LS_KEYS, formatCurrency } from "@/lib/utils";
+import { getFromLS, saveToLS, LS_KEYS, formatCurrency, getRelativeDateBadgeClass } from "@/lib/utils";
 import { getProducts, setProducts as setCachedProducts, pushStockToSheet } from "@/lib/productCache";
 import { Button } from "@/components/ui/button";
 import { Minus, Plus, ShoppingCart, Trash2, CreditCard } from "lucide-react";
@@ -698,7 +698,7 @@ const CartScreen = () => {
                      return (
                        <div key={index} className="flex flex-wrap items-center gap-1">
                          <span>{line.replace(/\s*•\s*(Hari ini|HARI INI|Kemarin|2 Hari Lalu|3 Hari Lalu)\s*$/, "")}</span>
-                         <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
+                         <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${getRelativeDateBadgeClass(relativeDateBadge === "HARI INI" ? "Hari ini" : relativeDateBadge)}`}>
                            {relativeDateBadge === "HARI INI" ? "Hari ini" : relativeDateBadge}
                          </span>
                        </div>

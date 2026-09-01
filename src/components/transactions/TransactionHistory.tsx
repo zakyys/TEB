@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useLocation } from "react-router-dom";
-import { getFromLS, saveToLS, getRelativeDateBadge, LS_KEYS, formatCurrency, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
+import { getFromLS, saveToLS, getRelativeDateBadge, getRelativeDateBadgeClass, LS_KEYS, formatCurrency, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
 import { safeGetAllTransactions, safeSaveAllTransactions, safeInitAndMigrate } from "@/lib/indexedDB";
 import { getProducts, setProducts, pushStockToSheet } from "@/lib/productCache";
 import { DUMMY_TRANSACTIONS, DUMMY_PRODUCTS } from "@/lib/dummyData";
@@ -1361,7 +1361,7 @@ const TransactionHistory: React.FC = () => {
                               <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-1">
                                  <span>{t.id} • {new Date(t.date).toLocaleString("id-ID")}</span>
                                  {getRelativeDateBadge(t.date) && (
-                                   <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
+                                   <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${getRelativeDateBadgeClass(getRelativeDateBadge(t.date))}`}>
                                      {getRelativeDateBadge(t.date)}
                                    </span>
                                  )}
@@ -1585,7 +1585,7 @@ const TransactionHistory: React.FC = () => {
                                     <Calendar className={`h-3.5 w-3.5 ${getIconClass()}`} />
                                     <span>{isSelisihTukar ? 'Tanggal Tukar' : 'Tanggal Beli'}: {new Date(transaction.date).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</span>
                                      {getRelativeDateBadge(transaction.date) && (
-                                       <span className="ml-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600">
+                                       <span className={`ml-1 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${getRelativeDateBadgeClass(getRelativeDateBadge(transaction.date))}`}>
                                          {getRelativeDateBadge(transaction.date)}
                                        </span>
                                      )}
@@ -2282,7 +2282,11 @@ const TransactionHistory: React.FC = () => {
                     <p>No. Transaksi: {trx.id}</p>
                     <p>
                       Tanggal: {dateStr}
-                      {relativeDateBadge && <span className="today-badge">{relativeDateBadge}</span>}
+                      {relativeDateBadge && (
+                        <span className={`today-badge ${getRelativeDateBadgeClass(relativeDateBadge)}`}>
+                          {relativeDateBadge}
+                        </span>
+                      )}
                     </p>
                     <p>Pelanggan: {trx.customer}</p>
                   </div>

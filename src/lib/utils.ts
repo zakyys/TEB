@@ -102,6 +102,21 @@ export function getRelativeDateBadge(value: string | Date | undefined): string |
   return null;
 }
 
+export function getRelativeDateBadgeClass(label: string | null): string {
+  switch (label) {
+    case "Kemarin":
+      // Cyan badge with red text, as requested.
+      return "border-cyan-300 bg-cyan-50 text-red-600 dark:border-cyan-700 dark:bg-cyan-950/30 dark:text-red-400";
+    case "2 Hari Lalu":
+      return "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-400";
+    case "3 Hari Lalu":
+      return "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-950/30 dark:text-violet-400";
+    case "Hari ini":
+    default:
+      return "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400";
+  }
+}
+
 // Backup all POS data to a text string
 export function backupData(): string {
   try {
