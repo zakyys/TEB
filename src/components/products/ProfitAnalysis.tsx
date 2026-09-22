@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { getFromLS, LS_KEYS, formatCurrency, saveToLS } from "@/lib/utils";
 import { getProducts as getCachedProducts, setProducts as setCachedProducts } from "@/lib/productCache";
-import { ArrowLeft, TrendingUp, Edit2, Check, X, Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { TrendingUp, Edit2, Check, X, Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -19,7 +19,7 @@ interface Product {
     threshold?: number;
 }
 
-const ProfitAnalysis = ({ onBack }: { onBack: () => void }) => {
+const ProfitAnalysis = ({ embedded = false }: { embedded?: boolean }) => {
     const [products, setProducts] = useState<Product[]>([]);
     const [selectedMarginRange, setSelectedMarginRange] = useState<string>("<10");
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -184,13 +184,10 @@ const ProfitAnalysis = ({ onBack }: { onBack: () => void }) => {
     }, [selectedMarginRange, searchQuery]);
 
     return (
-        <div className="bg-background min-h-screen pb-20">
-            <div className="p-4">
+        <div className={embedded ? "" : "bg-background min-h-screen pb-20"}>
+            <div className={embedded ? "" : "p-4"}>
                 {/* Header */}
                 <div className="flex items-center gap-3 mb-4">
-                    <Button variant="ghost" size="sm" onClick={onBack}>
-                        <ArrowLeft className="h-4 w-4" />
-                    </Button>
                     <div>
                         <h1 className="text-2xl font-bold flex items-center gap-2">
                             <TrendingUp className="h-6 w-6 text-green-600" />

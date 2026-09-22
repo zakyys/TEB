@@ -123,7 +123,7 @@ const BarcodeScanner = ({ onDetected }: { onDetected: (code: string) => void }) 
   );
 };
 
-import ProfitAnalysis from "./ProfitAnalysis";
+import BestSellers from "./BestSellers";
 
 const CATEGORY_LABELS: Record<string, string> = {
   BA: 'BAUT OTOMOTIF',
@@ -170,7 +170,7 @@ const ProductManagement = () => {
   const [showNoPriceOnly, setShowNoPriceOnly] = useState(false);
   const [selectedMarginRange, setSelectedMarginRange] = useState<string>("all");
   const [selectedPrefix, setSelectedPrefix] = useState<string>("all");
-  const [showProfitAnalysis, setShowProfitAnalysis] = useState(false);
+  const [activeSubMenu, setActiveSubMenu] = useState<"produk" | "analisa">("produk");
   const syncRequestRef = React.useRef(0);
 
   // Sync products from Google Sheets - MIRROR MODE (App follows Sheet exactly)
@@ -701,14 +701,39 @@ const ProductManagement = () => {
     return "text-emerald-600";
   };
 
-  // Show Profit Analysis view if toggled
-  if (showProfitAnalysis) {
-    return <ProfitAnalysis onBack={() => setShowProfitAnalysis(false)} />;
-  }
-
   return (
     <div className="bg-background min-h-screen pb-20">
       <div className="p-4">
+        {/* Sub Menu: Produk / Analisa */}
+        <div className="flex bg-gray-100 dark:bg-gray-800 rounded-full p-1 mb-4">
+          <button
+            onClick={() => setActiveSubMenu("produk")}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-full text-sm font-bold transition-all ${
+              activeSubMenu === "produk"
+                ? "bg-amber-500 text-white shadow"
+                : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+            }`}
+          >
+            <Package className="h-4 w-4" />
+            Produk
+          </button>
+          <button
+            onClick={() => setActiveSubMenu("analisa")}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-full text-sm font-bold transition-all ${
+              activeSubMenu === "analisa"
+                ? "bg-green-500 text-white shadow"
+                : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+            }`}
+          >
+            <TrendingUp className="h-4 w-4" />
+            Analisa
+          </button>
+        </div>
+
+        {activeSubMenu === "analisa" ? (
+          <BestSellers />
+        ) : (
+        <>
         {/* Search and Filter Bar */}
         <div className="flex flex-col gap-3 mb-4">
           <div className="relative">
@@ -895,6 +920,8 @@ const ProductManagement = () => {
             <span className="text-sm">Halaman {currentPage} dari {totalPages}</span>
             <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>&gt;</Button>
           </div>
+        )}
+        </>
         )}
       </div>
 
