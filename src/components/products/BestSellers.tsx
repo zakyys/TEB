@@ -36,6 +36,54 @@ interface AggItem {
   revenue: number;
 }
 
+type ScrewRingFilter = "all" | "exclude" | "only";
+
+// Agregasi item terjual dari transaksi selesai. Periode: mulai tanggal 1,
+// (months-1) bulan ke belakang sampai `now`. Filter: all = semua barang,
+// exclude = buang screw/ring, only = hanya screw/ring.
+const aggregateRanked = (
+  transactions: any[],
+  months: number,
+  filter: ScrewRingFilter,
+  now: Date
+): { ranked: AggItem[]; txCount: number } => {
+  const rangeStart = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
+  const map = new Map<string, AggItem>();
+  let count = 0;
+  transactions.forEach((t) => {
+    if (t?.status !== "completed") return;
+    // Lewati transaksi penyesuaian selisih tukar barang (ADJ-) — bukan penjualan produk.
+    const isExchangeAdjustment =
+      String(t?.customer || "") === "Tukar Barang" ||
+      String(t?.id || "").startsWith("ADJ-");
+    if (isExchangeAdjustment) return;
+    const d = new Date(t.date);
+    if (isNaN(d.getTime()) || d < rangeStart || d > now) return;
+    count++;
+    (t.items || []).forEach((item: any) => {
+      // Lewati item yang sudah di-refund (konsisten dengan laporan harian di home).
+      if (item?.sameDayRefunded || item?.refunded) return;
+      const name = String(item?.name || "(tanpa nama)");
+      if (filter === "exclude" && isScrewOrRing(name)) return;
+      if (filter === "only" && !isScrewOrRing(name)) return;
+      const qty = Number(item?.quantity) || 0;
+      const price = Number(item?.price) || 0;
+      const key = String(item?.sku || name).trim().toUpperCase();
+      const prev = map.get(key);
+      if (prev) {
+        prev.qty += qty;
+        prev.revenue += qty * price;
+      } else {
+        map.set(key, { key, name, sku: String(item?.sku || ""), qty, revenue: qty * price });
+      }
+    });
+  });
+  const ranked = Array.from(map.values()).sort(
+    (a, b) => b.qty - a.qty || b.revenue - a.revenue
+  );
+  return { ranked, txCount: count };
+};
+
 interface BestSellersProps {
   className?: string;
 }
@@ -77,44 +125,11 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
     };
   }, [now, periodMonths]);
 
-  // Agregasi item terjual dari transaksi selesai dalam periode
-  const { ranked, txCount } = useMemo(() => {
-    const map = new Map<string, AggItem>();
-    let count = 0;
-    transactions.forEach((t) => {
-      if (t?.status !== "completed") return;
-      // Lewati transaksi penyesuaian selisih tukar barang (ADJ-) — bukan penjualan produk.
-      const isExchangeAdjustment =
-        String(t?.customer || "") === "Tukar Barang" ||
-        String(t?.id || "").startsWith("ADJ-");
-      if (isExchangeAdjustment) return;
-      const d = new Date(t.date);
-      if (isNaN(d.getTime()) || d < rangeStart || d > now) return;
-      count++;
-      (t.items || []).forEach((item: any) => {
-        // Lewati item yang sudah di-refund (konsisten dengan laporan harian di home).
-        if (item?.sameDayRefunded || item?.refunded) return;
-        const name = String(item?.name || "(tanpa nama)");
-        // Filter kategori nama: exclude = buang screw/ring, only = hanya screw/ring.
-        if (screwRingFilter === "exclude" && isScrewOrRing(name)) return;
-        if (screwRingFilter === "only" && !isScrewOrRing(name)) return;
-        const qty = Number(item?.quantity) || 0;
-        const price = Number(item?.price) || 0;
-        const key = String(item?.sku || name).trim().toUpperCase();
-        const prev = map.get(key);
-        if (prev) {
-          prev.qty += qty;
-          prev.revenue += qty * price;
-        } else {
-          map.set(key, { key, name, sku: String(item?.sku || ""), qty, revenue: qty * price });
-        }
-      });
-    });
-    const list = Array.from(map.values()).sort(
-      (a, b) => b.qty - a.qty || b.revenue - a.revenue
-    );
-    return { ranked: list, txCount: count };
-  }, [transactions, rangeStart, now, screwRingFilter]);
+  // Agregasi item terjual dari transaksi selesai dalam periode terpilih
+  const { ranked, txCount } = useMemo(
+    () => aggregateRanked(transactions, periodMonths, screwRingFilter, now),
+    [transactions, periodMonths, screwRingFilter, now]
+  );
 
   const MAX_SHOW = 100;
   const visible = ranked.slice(0, MAX_SHOW);
@@ -139,24 +154,52 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
     return `barang-terjual_${fmt(rangeStart)}_${fmt(now)}`;
   };
 
-  // Export seluruh hasil ranking (termasuk di luar 100 tampilan) sesuai filter aktif.
+  // Export 3 sheet (Bulan ini / 2 Bulan / 3 Bulan). Tiap sheet berisi judul +
+  // periode di atas, lalu bagian TANPA SCREW/RING, pembatas, dan HANYA SCREW/RING.
   const handleExportExcel = () => {
     if (loading || ranked.length === 0) return;
-    const rows: (string | number)[][] = [
-      ["Peringkat", "SKU", "Nama Barang", "Qty Terjual", "Omzet"],
-      ...ranked.map((item, idx) => [
+    const wb = XLSX.utils.book_new();
+    const header = ["Peringkat", "SKU", "Nama Barang", "Qty Terjual", "Omzet"];
+    const sectionRows = (label: string, list: AggItem[]): (string | number)[][] => [
+      [`========== ${label} ==========`],
+      header,
+      ...list.map((item, idx) => [
         idx + 1,
         item.sku || "-",
         item.name,
         item.qty,
         item.revenue,
       ]),
+      [],
     ];
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws["!cols"] = [{ wch: 10 }, { wch: 16 }, { wch: 42 }, { wch: 12 }, { wch: 16 }];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Barang Terjual");
-    XLSX.writeFile(wb, `${exportFileName()}.xlsx`);
+    (
+      [
+        { sheet: "Bulan ini", months: 1 },
+        { sheet: "2 Bulan", months: 2 },
+        { sheet: "3 Bulan", months: 3 },
+      ] as const
+    ).forEach(({ sheet, months }) => {
+      const start = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
+      const withYear = start.getFullYear() !== now.getFullYear();
+      const periodText = `${formatDateId(start, withYear)} - ${formatDateId(now, withYear)}`;
+      const rows: (string | number)[][] = [
+        [`Barang Terlaris - ${storeName}`],
+        [`Periode: ${periodText}`],
+        [],
+        ...sectionRows(
+          "TANPA SCREW/RING",
+          aggregateRanked(transactions, months, "exclude", now).ranked
+        ),
+        ...sectionRows(
+          "HANYA SCREW/RING",
+          aggregateRanked(transactions, months, "only", now).ranked
+        ),
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws["!cols"] = [{ wch: 10 }, { wch: 16 }, { wch: 42 }, { wch: 12 }, { wch: 16 }];
+      XLSX.utils.book_append_sheet(wb, ws, sheet);
+    });
+    XLSX.writeFile(wb, `Barang Terlaris-${storeName}.xlsx`);
   };
 
   const handleExportPDF = () => {
