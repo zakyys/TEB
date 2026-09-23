@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { safeGetAllTransactions } from "@/lib/indexedDB";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, getStoreName } from "@/lib/utils";
 import {
   Trophy,
   RefreshCw,
@@ -36,6 +36,7 @@ interface BestSellersProps {
 }
 
 const BestSellers = ({ className = "" }: BestSellersProps) => {
+  const storeName = getStoreName();
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [periodMonths, setPeriodMonths] = useState<1 | 2 | 3>(1);
@@ -125,9 +126,11 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
       {/* Header */}
       <div className="flex items-center justify-between gap-2 mb-3">
         <div>
-          <h1 className="text-lg font-bold flex items-center gap-2">
-            <Trophy className="h-5 w-5 text-amber-500" />
-            Barang Paling Banyak Terjual
+          <h1 className="text-lg font-bold flex items-center flex-wrap gap-x-2">
+            <Trophy className="h-5 w-5 text-amber-500 flex-shrink-0" />
+            <span>
+              Barang Paling Banyak Terjual ({storeName})
+            </span>
           </h1>
           <p className="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5">
             <CalendarDays className="h-3 w-3" />
