@@ -1,12 +1,17 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { safeGetAllTransactions } from "@/lib/indexedDB";
 import { formatCurrency, getStoreName } from "@/lib/utils";
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
 import {
   Trophy,
   RefreshCw,
   PackageSearch,
   CalendarDays,
   Loader2,
+  FileSpreadsheet,
+  FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -121,6 +126,63 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
     return "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400";
   };
 
+  const screwRingFilterLabel =
+    screwRingFilter === "exclude"
+      ? "Tanpa Screw/Ring"
+      : screwRingFilter === "only"
+        ? "Hanya Screw/Ring"
+        : "Semua";
+
+  const exportFileName = () => {
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+    return `barang-terjual_${fmt(rangeStart)}_${fmt(now)}`;
+  };
+
+  // Export seluruh hasil ranking (termasuk di luar 100 tampilan) sesuai filter aktif.
+  const handleExportExcel = () => {
+    if (loading || ranked.length === 0) return;
+    const rows: (string | number)[][] = [
+      ["Peringkat", "SKU", "Nama Barang", "Qty Terjual", "Omzet"],
+      ...ranked.map((item, idx) => [
+        idx + 1,
+        item.sku || "-",
+        item.name,
+        item.qty,
+        item.revenue,
+      ]),
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = [{ wch: 10 }, { wch: 16 }, { wch: 42 }, { wch: 12 }, { wch: 16 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Barang Terjual");
+    XLSX.writeFile(wb, `${exportFileName()}.xlsx`);
+  };
+
+  const handleExportPDF = () => {
+    if (loading || ranked.length === 0) return;
+    const doc = new jsPDF();
+    doc.setFontSize(13);
+    doc.text(`Barang Paling Banyak Terjual (${storeName})`, 14, 12);
+    doc.setFontSize(9);
+    doc.setTextColor(110);
+    doc.text(`Periode: ${periodLabel}  •  Filter: ${screwRingFilterLabel}`, 14, 18);
+    (doc as any).autoTable({
+      head: [["No", "SKU", "Nama Barang", "Qty", "Omzet"]],
+      body: ranked.map((item, idx) => [
+        idx + 1,
+        item.sku || "-",
+        item.name,
+        item.qty,
+        formatCurrency(item.revenue),
+      ]),
+      startY: 22,
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [245, 158, 11] },
+    });
+    doc.save(`${exportFileName()}.pdf`);
+  };
+
   return (
     <div className={className}>
       {/* Header */}
@@ -137,15 +199,38 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
             Periode: {periodLabel}
           </p>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 w-8 p-0 flex-shrink-0"
-          onClick={loadTransactions}
-          disabled={loading}
-        >
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-        </Button>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-2 border-green-200 text-green-600 hover:bg-green-50 hover:text-green-700 dark:border-green-900 dark:hover:bg-green-950"
+            onClick={handleExportExcel}
+            disabled={loading || ranked.length === 0}
+            title="Export Excel"
+          >
+            <FileSpreadsheet className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-2 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-900 dark:hover:bg-red-950"
+            onClick={handleExportPDF}
+            disabled={loading || ranked.length === 0}
+            title="Export PDF"
+          >
+            <FileText className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 flex-shrink-0"
+            onClick={loadTransactions}
+            disabled={loading}
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            <span className="text-xs font-semibold">Refresh</span>
+          </Button>
+        </div>
       </div>
 
       {/* Filter Periode */}
