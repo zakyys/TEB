@@ -39,7 +39,7 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [periodMonths, setPeriodMonths] = useState<1 | 2 | 3>(1);
-  const [excludeScrewRing, setExcludeScrewRing] = useState(false);
+  const [screwRingFilter, setScrewRingFilter] = useState<"all" | "exclude" | "only">("all");
   const [now, setNow] = useState(() => new Date());
 
   const loadTransactions = async () => {
@@ -89,7 +89,9 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
         // Lewati item yang sudah di-refund (konsisten dengan laporan harian di home).
         if (item?.sameDayRefunded || item?.refunded) return;
         const name = String(item?.name || "(tanpa nama)");
-        if (excludeScrewRing && isScrewOrRing(name)) return;
+        // Filter kategori nama: exclude = buang screw/ring, only = hanya screw/ring.
+        if (screwRingFilter === "exclude" && isScrewOrRing(name)) return;
+        if (screwRingFilter === "only" && !isScrewOrRing(name)) return;
         const qty = Number(item?.quantity) || 0;
         const price = Number(item?.price) || 0;
         const key = String(item?.sku || name).trim().toUpperCase();
@@ -106,7 +108,7 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
       (a, b) => b.qty - a.qty || b.revenue - a.revenue
     );
     return { ranked: list, txCount: count };
-  }, [transactions, rangeStart, now, excludeScrewRing]);
+  }, [transactions, rangeStart, now, screwRingFilter]);
 
   const MAX_SHOW = 100;
   const visible = ranked.slice(0, MAX_SHOW);
@@ -163,9 +165,9 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
       {/* Filter Kategori Nama */}
       <div className="flex gap-1.5 overflow-x-auto pb-1 mb-3 no-scrollbar">
         <button
-          onClick={() => setExcludeScrewRing(false)}
+          onClick={() => setScrewRingFilter("all")}
           className={`px-4 py-2 rounded-full text-xs font-extrabold transition-all whitespace-nowrap shadow-sm border ${
-            !excludeScrewRing
+            screwRingFilter === "all"
               ? "bg-gray-600 text-white border-gray-600"
               : "bg-white text-gray-500 border-gray-200 hover:border-gray-300 dark:bg-gray-900 dark:border-gray-700"
           }`}
@@ -173,14 +175,24 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
           Semua
         </button>
         <button
-          onClick={() => setExcludeScrewRing(true)}
+          onClick={() => setScrewRingFilter("exclude")}
           className={`px-4 py-2 rounded-full text-xs font-extrabold transition-all whitespace-nowrap shadow-sm border ${
-            excludeScrewRing
+            screwRingFilter === "exclude"
               ? "bg-blue-600 text-white border-blue-600"
               : "bg-white text-gray-500 border-gray-200 hover:border-gray-300 dark:bg-gray-900 dark:border-gray-700"
           }`}
         >
           Tanpa Screw/Ring
+        </button>
+        <button
+          onClick={() => setScrewRingFilter("only")}
+          className={`px-4 py-2 rounded-full text-xs font-extrabold transition-all whitespace-nowrap shadow-sm border ${
+            screwRingFilter === "only"
+              ? "bg-amber-500 text-white border-amber-500"
+              : "bg-white text-gray-500 border-gray-200 hover:border-gray-300 dark:bg-gray-900 dark:border-gray-700"
+          }`}
+        >
+          Hanya Screw/Ring
         </button>
       </div>
 
