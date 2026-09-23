@@ -77,10 +77,17 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
     let count = 0;
     transactions.forEach((t) => {
       if (t?.status !== "completed") return;
+      // Lewati transaksi penyesuaian selisih tukar barang (ADJ-) — bukan penjualan produk.
+      const isExchangeAdjustment =
+        String(t?.customer || "") === "Tukar Barang" ||
+        String(t?.id || "").startsWith("ADJ-");
+      if (isExchangeAdjustment) return;
       const d = new Date(t.date);
       if (isNaN(d.getTime()) || d < rangeStart || d > now) return;
       count++;
       (t.items || []).forEach((item: any) => {
+        // Lewati item yang sudah di-refund (konsisten dengan laporan harian di home).
+        if (item?.sameDayRefunded || item?.refunded) return;
         const name = String(item?.name || "(tanpa nama)");
         if (excludeScrewRing && isScrewOrRing(name)) return;
         const qty = Number(item?.quantity) || 0;
