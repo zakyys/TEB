@@ -11,6 +11,8 @@ export interface Product {
 
 export interface CartItem extends Product {
   quantity: number
+  // Harga acuan sebelum diskon (dipakai untuk menghitung & membatalkan diskon)
+  basePrice?: number
 }
 
 export interface ProfileData {

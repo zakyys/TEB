@@ -234,6 +234,9 @@ const POSScreen = () => {
   const updateQuantityStore = usePosStore((s) => s.updateQuantity);
   const setItemPrice = usePosStore((s) => s.setItemPrice);
   const clearCart = usePosStore((s) => s.clearCart);
+  // Diskon keranjang aktif? (diatur di halaman Keranjang)
+  const discountPercent = usePosStore((s) => s.discountPercent);
+  const isDiscountActive = discountPercent > 0;
 
   // Floating cart bottom sheet state (for mobile)
   const [showMobileCart, setShowMobileCart] = useState(false);
@@ -374,6 +377,7 @@ const POSScreen = () => {
       subtotal,
       tax,
       total,
+      discountPercent,
     })
 
     setProducts(updatedProducts)
@@ -656,13 +660,15 @@ const POSScreen = () => {
                           onClick={(e) => e.stopPropagation()}
                           onMouseDown={(e) => e.stopPropagation()}
                         >
-                          <span className="text-xs text-blue-500 font-medium">Custom Harga</span>
-                          <div className="flex items-center border rounded bg-white overflow-hidden">
-                            <span className="px-2 text-sm text-muted-foreground bg-gray-50 border-r h-8 flex items-center">Rp</span>
+                          <span className={`text-xs font-medium ${isDiscountActive ? 'text-red-500' : 'text-blue-500'}`}>Custom Harga</span>
+                          <div className={`flex items-center border rounded overflow-hidden ${isDiscountActive ? 'border-red-300 bg-red-50' : 'bg-white'}`}>
+                            <span className={`px-2 text-sm border-r h-8 flex items-center ${isDiscountActive ? 'text-red-400 bg-red-100 border-red-200' : 'text-muted-foreground bg-gray-50'}`}>Rp</span>
                             <input
                               type="text"
                               inputMode="numeric"
                               placeholder="0"
+                              disabled={isDiscountActive}
+                              title={isDiscountActive ? 'Harga terkunci saat diskon aktif - hapus diskon di halaman Keranjang untuk mengubah' : 'Ubah harga item di keranjang'}
                               value={editingPrices[item.id] !== undefined ? editingPrices[item.id] : (inCart?.price ?? item.price).toLocaleString('id-ID')}
                               onClick={(e) => e.stopPropagation()}
                               onFocus={(e) => {
@@ -682,9 +688,8 @@ const POSScreen = () => {
                                   return next;
                                 });
                               }}
-                              className="w-24 px-2 py-1 h-8 text-right text-sm focus:ring-1 focus:ring-amber-400 focus:outline-none"
+                              className={`w-24 px-2 py-1 h-8 text-right text-sm focus:outline-none ${isDiscountActive ? 'text-red-600 bg-red-50 cursor-not-allowed' : 'focus:ring-1 focus:ring-amber-400'}`}
                               aria-label="Ubah harga item di keranjang"
-                              title="Ubah harga item di keranjang"
                             />
                           </div>
                         </div>
@@ -791,12 +796,14 @@ const POSScreen = () => {
                           <input
                             type="number"
                             min="0"
+                            disabled={isDiscountActive}
+                            title={isDiscountActive ? 'Harga terkunci saat diskon aktif - hapus diskon di halaman Keranjang untuk mengubah' : undefined}
                             value={item.price}
                             onChange={e => {
                               const newPrice = parseInt(e.target.value) || 0;
                               setItemPrice(item.id, newPrice);
                             }}
-                            className="w-20 px-1 py-0.5 border rounded text-right text-sm"
+                            className={`w-20 px-1 py-0.5 border rounded text-right text-sm ${isDiscountActive ? 'border-red-300 bg-red-50 text-red-600 cursor-not-allowed' : ''}`}
                           />
                           <span className="text-xs text-muted-foreground">x {item.quantity}</span>
                         </div>

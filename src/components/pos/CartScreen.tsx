@@ -23,6 +23,14 @@ const CartScreen = () => {
   const updateQuantityStore = usePosStore(s => s.updateQuantity);
   const setItemPrice = usePosStore(s => s.setItemPrice);
   const clearCart = usePosStore(s => s.clearCart);
+  // Diskon keranjang dalam persen (0 = tidak aktif). Box Rp di UI = ekuivalen rupiahnya.
+  const discountPercent = usePosStore(s => s.discountPercent);
+  const setDiscountPercent = usePosStore(s => s.setDiscountPercent);
+  const clearDiscount = usePosStore(s => s.clearDiscount);
+  const isDiscountActive = discountPercent > 0;
+  // Buffer ketikan lokal agar input % dan Rp tidak saling menimpa saat sedang diketik
+  const [editingPct, setEditingPct] = useState<string | null>(null);
+  const [editingRp, setEditingRp] = useState<string | null>(null);
   const [amountPaid, setAmountPaid] = useState("");
   const [showPayment, setShowPayment] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<string>("cash");
@@ -32,12 +40,8 @@ const CartScreen = () => {
   const [isUangPasSelected, setIsUangPasSelected] = useState(false);
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
   const [lastTransactionTotal, setLastTransactionTotal] = useState(0);
-
-  // Discount states
-  const [discountPercent, setDiscountPercent] = useState<string>("");
-  const [discountAmount, setDiscountAmount] = useState<number>(0);
-  const [discountNominalInput, setDiscountNominalInput] = useState<string>("");
-  const [isEditingNominal, setIsEditingNominal] = useState(false);
+  // Konfirmasi hapus barang dari keranjang
+  const [itemToDelete, setItemToDelete] = useState<CartItem | null>(null);
 
   // Hutang (Debt) states
   const [isHutangMode, setIsHutangMode] = useState(false);
@@ -66,31 +70,15 @@ const CartScreen = () => {
     setIsCartLoaded(true);
   }, []);
 
-  // Total sama dengan subtotal (tanpa PPN)
+  // Total sama dengan subtotal (tanpa PPN). Saat diskon aktif, item.price sudah harga setelah potong.
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-
-  // Kalkulasi diskon - use discountAmount directly if editing nominal, otherwise calculate from percent
-  const parsedDiscount = parseFloat(discountPercent) || 0;
-  const calculatedDiscountFromPercent = Math.round((subtotal * parsedDiscount) / 100);
-
-  // Use discountAmount directly (it's set by both nominal input and percent input)
-  const effectiveDiscount = discountAmount;
-  const total = subtotal - effectiveDiscount;
-
-  // Track if discount was set via percent input (not nominal)
-  const [discountSource, setDiscountSource] = useState<'nominal' | 'percent' | null>(null);
-
-  // Update discountAmount only when percent changes AND source is percent
-  React.useEffect(() => {
-    if (discountSource === 'percent' || discountSource === null) {
-      setDiscountAmount(calculatedDiscountFromPercent);
-      if (calculatedDiscountFromPercent > 0) {
-        setDiscountNominalInput(String(calculatedDiscountFromPercent));
-      } else {
-        setDiscountNominalInput("");
-      }
-    }
-  }, [calculatedDiscountFromPercent, discountSource]);
+  const total = subtotal;
+  // Total harga asli (sebelum diskon) untuk tampilan coret
+  const originalTotal = cart.reduce((sum, item) => sum + (item.basePrice ?? item.price) * item.quantity, 0);
+  // Jumlah rupiah yang benar-benar terpotong (harga asli - harga diskon)
+  const totalDiscountRp = originalTotal - total;
+  // Format persen: tampil bulat jika bisa (10 -> "10"), else max 2 desimal (1.67 -> "1.67")
+  const formatPct = (p: number) => (p % 1 === 0 ? String(p) : String(parseFloat(p.toFixed(2))));
 
   // Auto-update amountPaid ketika total berubah dan Uang Pas sudah dipilih
   React.useEffect(() => {
@@ -152,9 +140,8 @@ const CartScreen = () => {
       subtotal,
       tax: 0,
       total,
-      discountPercent: parseFloat(discountPercent) || 0,
-      discountAmount,
       customerName: customerNameInput.trim() || undefined,
+      discountPercent,
     });
 
     // Perbarui produk di UI (CartScreen tidak pegang state products, jadi cukup persist)
@@ -238,9 +225,8 @@ const CartScreen = () => {
       subtotal,
       tax: 0,
       total,
-      discountPercent: parseFloat(discountPercent) || 0,
-      discountAmount,
       customerName: hutangCustomerName.trim(),
+      discountPercent,
     });
 
     // Simpan sebagai note hutang (dengan Transaction ID)
@@ -335,19 +321,21 @@ const CartScreen = () => {
                     variant="ghost"
                     size="icon"
                     className="h-6 w-6 rounded-full text-red-500 hover:text-red-600 hover:bg-red-50 shrink-0"
-                    onClick={() => updateQuantity(item.id, -1)}
+                    onClick={() => setItemToDelete(item)}
                   >
                     <Trash2 className="h-3 w-3" />
                   </Button>
                 </div>
                 {/* Row 2: Harga x Qty */}
                 <div className="flex items-center gap-2 mt-1 px-1">
-                  <span className="text-[10px] text-blue-500 font-medium">Custom Harga</span>
-                  <div className="flex items-center border rounded bg-white overflow-hidden shadow-sm">
-                    <span className="px-2 text-[10px] text-muted-foreground bg-gray-50 border-r py-1 flex items-center">Rp</span>
+                  <span className={`text-[10px] font-medium ${isDiscountActive ? 'text-red-500' : 'text-blue-500'}`}>Custom Harga</span>
+                  <div className={`flex items-center border rounded overflow-hidden shadow-sm ${isDiscountActive ? 'border-red-300 bg-red-50' : 'bg-white'}`}>
+                    <span className={`px-2 text-[10px] border-r py-1 flex items-center ${isDiscountActive ? 'text-red-400 bg-red-100 border-red-200' : 'text-muted-foreground bg-gray-50'}`}>Rp</span>
                     <input
                       type="text"
                       inputMode="numeric"
+                      disabled={isDiscountActive}
+                      title={isDiscountActive ? 'Harga terkunci saat diskon aktif - hapus diskon dulu untuk mengubah' : undefined}
                       value={editingPrices[item.id] !== undefined ? editingPrices[item.id] : item.price.toLocaleString('id-ID')}
                       onChange={e => {
                         const val = e.target.value.replace(/\D/g, '');
@@ -366,7 +354,7 @@ const CartScreen = () => {
                           return next;
                         });
                       }}
-                      className="w-20 px-1.5 py-1 text-right text-xs font-medium focus:ring-1 focus:ring-amber-400 focus:outline-none"
+                      className={`w-20 px-1.5 py-1 text-right text-xs font-medium focus:outline-none ${isDiscountActive ? 'text-red-600 bg-red-50 cursor-not-allowed' : 'focus:ring-1 focus:ring-amber-400'}`}
                       aria-label="Ubah harga"
                     />
                   </div>
@@ -423,107 +411,102 @@ const CartScreen = () => {
                 <Button variant="outline" size="sm" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}>&gt;</Button>
               </div>
             )}
-          </div>
-        )}
 
-        {/* Discount Section */}
-        {cart.length > 0 && (
-          <div className="mt-4 p-4 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-xl border border-purple-200">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-lg">🏷️</span>
-                <span className="text-sm font-semibold text-purple-700">Diskon</span>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap justify-end">
-                {/* Nominal Discount Input */}
-                <div className="flex items-center bg-white rounded-lg border border-orange-300 overflow-hidden">
-                  <span className="px-2 py-2 bg-orange-100 text-orange-700 font-bold text-[10px]">Rp</span>
-                  <input
-                    type="number"
-                    min="0"
-                    value={discountNominalInput}
-                    onFocus={(e) => {
-                      setIsEditingNominal(true);
-                      setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
-                    }}
-                    onBlur={() => setIsEditingNominal(false)}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setDiscountNominalInput(val);
-                      setDiscountSource('nominal'); // Mark source as nominal
-                      const nominal = parseFloat(val) || 0;
-                      // Set discountAmount directly to avoid rounding issues
-                      const clampedNominal = Math.min(nominal, subtotal);
-                      setDiscountAmount(clampedNominal);
-                      if (subtotal > 0 && nominal >= 0) {
-                        const percent = (nominal / subtotal) * 100;
-                        // Max 100%
-                        if (percent > 100) {
-                          setDiscountPercent("100");
-                        } else {
-                          // Round to 1 decimal place for clean display
-                          setDiscountPercent(percent.toFixed(1).replace(/\.0$/, ''));
-                        }
-                      } else {
-                        setDiscountPercent("");
-                      }
-                    }}
-                    placeholder="0"
-                    className="w-20 px-2 py-2 text-center text-sm font-semibold focus:outline-none"
-                  />
+            {/* Discount Section - mengontrol box custom harga tiap barang */}
+            {cart.length > 0 && (
+              <div className={`mt-4 p-4 rounded-xl border transition-colors ${isDiscountActive ? 'bg-red-50 border-red-200' : 'bg-gradient-to-r from-purple-50 to-indigo-50 border-purple-200'}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🏷️</span>
+                    <span className={`text-sm font-semibold ${isDiscountActive ? 'text-red-600' : 'text-purple-700'}`}>Diskon</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    {/* Box Rp = ekuivalen rupiah dari diskon. Ketik di sini -> box % otomatis menyesuaikan */}
+                    <div className={`flex items-center rounded-lg border overflow-hidden bg-white ${editingRp !== null || (isDiscountActive && editingPct === null) ? 'border-orange-500 ring-1 ring-orange-300' : 'border-orange-300'}`}>
+                      <span className="px-2 py-2 bg-orange-100 text-orange-700 font-bold text-[10px] whitespace-nowrap">Rp</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={editingRp !== null ? editingRp : (totalDiscountRp > 0 ? Math.round(totalDiscountRp) : '')}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setEditingRp(val);
+                          const rp = parseFloat(val) || 0;
+                          // Konversi Rp -> persen dari total harga asli
+                          if (originalTotal > 0 && rp > 0) {
+                            setDiscountPercent(Math.min(100, (rp / originalTotal) * 100));
+                          } else {
+                            setDiscountPercent(0);
+                          }
+                        }}
+                        onFocus={(e) => {
+                          setEditingRp(String(totalDiscountRp > 0 ? Math.round(totalDiscountRp) : ''));
+                          setEditingPct(null);
+                          setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+                        }}
+                        onBlur={() => setEditingRp(null)}
+                        placeholder="0"
+                        className="no-number-spinner w-28 px-2 py-2 text-center text-sm font-semibold focus:outline-none"
+                      />
+                    </div>
+                    {/* Box % = sumber diskon. Ketik di sini -> box Rp otomatis menyesuaikan */}
+                    <div className={`flex items-center rounded-lg border overflow-hidden bg-white ${editingPct !== null || (isDiscountActive && editingRp === null) ? 'border-purple-600 ring-1 ring-purple-300' : 'border-purple-300'}`}>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        value={editingPct !== null ? editingPct : (discountPercent > 0 ? formatPct(discountPercent) : '')}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setEditingPct(val);
+                          const pct = parseFloat(val) || 0;
+                          setDiscountPercent(pct);
+                        }}
+                        onFocus={(e) => {
+                          setEditingPct(discountPercent > 0 ? formatPct(discountPercent) : '');
+                          setEditingRp(null);
+                          setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+                        }}
+                        onBlur={() => setEditingPct(null)}
+                        placeholder="0"
+                        className="no-number-spinner w-14 px-2 py-2 text-center text-sm font-semibold focus:outline-none"
+                      />
+                      <span className="px-2 py-2 bg-purple-100 text-purple-700 font-bold text-sm">%</span>
+                    </div>
+                  </div>
                 </div>
-                {/* Percentage Discount Input */}
-                <div className="flex items-center bg-white rounded-lg border border-purple-300 overflow-hidden">
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.1"
-                    value={discountPercent}
-                    onFocus={(e) => {
-                      setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
-                    }}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setDiscountSource('percent'); // Mark source as percent
-                      // Max 100%
-                      if (parseFloat(val) > 100) {
-                        setDiscountPercent("100");
-                      } else {
-                        setDiscountPercent(val);
-                      }
-                    }}
-                    placeholder="0"
-                    className="w-14 px-2 py-2 text-center text-sm font-semibold focus:outline-none"
-                  />
-                  <span className="px-2 py-2 bg-purple-100 text-purple-700 font-bold text-sm">%</span>
-                </div>
-              </div>
-            </div>
 
-            {/* Quick discount buttons */}
-            <div className="flex gap-2 mt-3">
-              {[3, 5, 7, 10].map((percent) => (
-                <button
-                  key={percent}
-                  onClick={() => { setDiscountSource('percent'); setDiscountPercent(String(percent)); }}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg border transition-all ${discountPercent === String(percent)
-                    ? 'bg-purple-600 text-white border-purple-600'
-                    : 'bg-white text-purple-600 border-purple-300 hover:bg-purple-50'
-                    }`}
-                >
-                  {percent}%
-                </button>
-              ))}
-              {discountPercent && (
-                <button
-                  onClick={() => { setDiscountPercent(""); setDiscountAmount(0); setDiscountNominalInput(""); setDiscountSource(null); }}
-                  className="px-3 py-1.5 text-xs font-bold rounded-lg bg-gray-200 text-gray-600 hover:bg-gray-300 transition-all"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
+                {/* Quick buttons + clear */}
+                <div className="flex gap-2 mt-3">
+                  {[3, 5, 7, 10].map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setDiscountPercent(p)}
+                      className={`flex-1 py-1.5 text-xs font-bold rounded-lg border transition-all ${discountPercent === p
+                        ? 'bg-purple-600 text-white border-purple-600'
+                        : 'bg-white text-purple-600 border-purple-300 hover:bg-purple-50'
+                        }`}
+                    >
+                      {p}%
+                    </button>
+                  ))}
+                  {isDiscountActive && (
+                    <button
+                      onClick={clearDiscount}
+                      className="px-3 py-1.5 text-xs font-bold rounded-lg bg-gray-200 text-gray-600 hover:bg-gray-300 transition-all"
+                    >
+                      ✕ Hapus
+                    </button>
+                  )}
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-2">
+                  {isDiscountActive
+                    ? `Diskon ${formatPct(discountPercent)}% ≈ hemat Rp ${Math.round(totalDiscountRp).toLocaleString('id-ID')} - semua box harga otomatis menyesuaikan (merah)`
+                    : 'Isi % atau Rp - keduanya saling menyesuaikan, semua box custom harga ikut berubah'}
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -574,10 +557,12 @@ const CartScreen = () => {
 
               {/* Total - Center */}
               <div className="flex flex-col items-center flex-1">
-                {discountAmount > 0 && (
+                {isDiscountActive && (
                   <div className="flex items-center gap-1 text-xs">
-                    <span className="text-gray-400 line-through">{formatCurrency(subtotal)}</span>
-                    <span className="text-red-500 font-semibold">-{discountPercent}%</span>
+                    <span className="text-gray-400 line-through">{formatCurrency(originalTotal)}</span>
+                    <span className="text-red-500 font-semibold">
+                      -{formatPct(discountPercent)}% ({formatCurrency(totalDiscountRp)})
+                    </span>
                   </div>
                 )}
                 <div className="flex items-center gap-2">
@@ -665,6 +650,31 @@ const CartScreen = () => {
               }}
             >
               OK
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Dialog Konfirmasi Hapus Barang */}
+      <Dialog open={itemToDelete !== null} onOpenChange={(open) => { if (!open) setItemToDelete(null); }}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle className="text-base">Hapus Barang?</DialogTitle>
+            <DialogDescription className="text-sm">
+              {itemToDelete?.name} akan dihapus dari keranjang.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex flex-row gap-2">
+            <Button variant="outline" className="flex-1" onClick={() => setItemToDelete(null)}>
+              Batal
+            </Button>
+            <Button
+              className="flex-1 bg-red-500 hover:bg-red-600 text-white"
+              onClick={() => {
+                if (itemToDelete) updateQuantity(itemToDelete.id, -1);
+                setItemToDelete(null);
+              }}
+            >
+              Hapus
             </Button>
           </DialogFooter>
         </DialogContent>

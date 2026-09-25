@@ -6,6 +6,9 @@ import { LS_KEYS } from '@/lib/utils'
 interface PosState {
   cart: CartItem[]
   enablePPN: boolean
+  // Diskon aktif keranjang dalam persen (0 = tidak aktif, boleh desimal mis. 1.67).
+  // Box Rp di UI hanyalah tampilan/ekuivalen rupiah dari persen ini.
+  discountPercent: number
 
   // Actions
   addToCart: (product: Product) => void
@@ -14,7 +17,18 @@ interface PosState {
   removeFromCart: (id: string) => void
   clearCart: () => void
   setEnablePPN: (value: boolean) => void
+  setDiscountPercent: (value: number) => void
+  clearDiscount: () => void
 }
+
+// Hitung harga akhir satu barang dari harga acuan (basePrice) + diskon persen.
+// Hasil dibulatkan ke rupiah terdekat (boleh selisih tipis dari hitungan exak).
+export const computeFinalPrice = (basePrice: number, percent: number): number => {
+  if (percent > 0) return Math.max(0, Math.round(basePrice * (1 - percent / 100)))
+  return basePrice
+}
+
+const isDiscountActive = (percent: number) => percent > 0
 
 export const usePosStore = create<PosState>()(
   persist(
@@ -45,9 +59,22 @@ export const usePosStore = create<PosState>()(
         }
       } catch { }
 
+      // Terapkan harga diskon ke seluruh cart.
+      // Saat diskon aktif: price = harga setelah potong (basePrice tetap tersimpan).
+      // Saat diskon nonaktif: price = basePrice.
+      const recomputePrices = (cart: CartItem[], percent: number): CartItem[] =>
+        cart.map((i) => ({
+          ...i,
+          basePrice: i.basePrice ?? i.price,
+          price: isDiscountActive(percent)
+            ? computeFinalPrice(i.basePrice ?? i.price, percent)
+            : (i.basePrice ?? i.price),
+        }))
+
       return {
         cart: initialCart,
         enablePPN: initialPPN,
+        discountPercent: 0,
 
         addToCart: (product) => {
           set((state) => {
@@ -60,7 +87,12 @@ export const usePosStore = create<PosState>()(
                 ),
               }
             }
-            return { cart: [...state.cart, { ...product, quantity: 1 }] }
+            // Barang baru langsung ikut diskon aktif (jika ada)
+            const basePrice = product.price
+            const price = isDiscountActive(state.discountPercent)
+              ? computeFinalPrice(basePrice, state.discountPercent)
+              : basePrice
+            return { cart: [...state.cart, { ...product, quantity: 1, basePrice, price }] }
           })
         },
 
@@ -76,31 +108,53 @@ export const usePosStore = create<PosState>()(
           }
         },
 
+        // Edit manual harga. Hanya bisa dilakukan saat diskon nonaktif (box di-disable UI).
+        // Harga yang diketik menjadi acuan diskon berikutnya.
         setItemPrice: (id, price) => {
           set((state) => ({
-            cart: state.cart.map((i) => (i.id === id ? { ...i, price } : i)),
+            cart: state.cart.map((i) =>
+              i.id === id ? { ...i, price, basePrice: price } : i,
+            ),
           }))
         },
 
         removeFromCart: (id) => set((state) => ({ cart: state.cart.filter((i) => i.id !== id) })),
-        clearCart: () => set({ cart: [] }),
+        clearCart: () => set((state) => ({ cart: [], discountPercent: 0 })),
 
         setEnablePPN: (value) => set({ enablePPN: value }),
+
+        setDiscountPercent: (value) => {
+          const percent = Math.min(100, Math.max(0, value || 0))
+          set((state) => ({
+            discountPercent: percent,
+            cart: recomputePrices(state.cart, percent),
+          }))
+        },
+
+        clearDiscount: () => {
+          set((state) => ({
+            discountPercent: 0,
+            cart: recomputePrices(state.cart, 0),
+          }))
+        },
       }
     },
     {
       name: 'POS_STORE',
-      version: 3, // Bump version to trigger migration
+      version: 5, // v5: diskon berbasis persen (box Rp = ekuivalen rupiah)
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         cart: state.cart,
         enablePPN: state.enablePPN,
+        discountPercent: state.discountPercent,
       }),
       migrate: (persisted: any, version) => {
-        // No shape change for now; ensure defaults
+        const cart: CartItem[] = Array.isArray(persisted?.cart) ? persisted.cart : []
         return {
-          cart: Array.isArray(persisted?.cart) ? persisted.cart : [],
+          cart: cart.map((i) => ({ ...i, basePrice: typeof i.basePrice === 'number' ? i.basePrice : i.price })),
           enablePPN: typeof persisted?.enablePPN === 'boolean' ? persisted.enablePPN : false,
+          // Diskon tidak dibawa antar versi - selalu mulai nonaktif
+          discountPercent: 0,
         }
       },
     },
