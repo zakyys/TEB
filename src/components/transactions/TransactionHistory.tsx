@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
-import { useLocation } from "react-router-dom";
 import { getFromLS, saveToLS, getRelativeDateBadge, getRelativeDateBadgeClass, LS_KEYS, formatCurrency, normalizeSearch, collapseLeadingZeros, matchesLoose, getSearchRelevance } from "@/lib/utils";
 import { safeGetAllTransactions, safeSaveAllTransactions, safeInitAndMigrate } from "@/lib/indexedDB";
 import { getProducts, setProducts, pushStockToSheet } from "@/lib/productCache";
 import { DUMMY_TRANSACTIONS, DUMMY_PRODUCTS } from "@/lib/dummyData";
-import { Search, Calendar, Printer, RotateCcw, ChevronRight, ChevronLeft, Info, X, ArrowRight, Banknote, RefreshCw, ShoppingCart, Pencil, Trash2, Minus, Plus, ScanBarcode, Tag } from "lucide-react";
+import { Search, Calendar, Printer, RotateCcw, ChevronRight, ChevronLeft, Info, X, ArrowRight, Banknote, RefreshCw, ShoppingCart, Pencil, Trash2, Minus, Plus, ScanBarcode, Receipt } from "lucide-react";
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -20,7 +19,7 @@ import "jspdf-autotable";
 import { saveAs } from "file-saver";
 import { useToast } from "@/components/ui/use-toast";
 import { getDailyStatsInRange } from "@/lib/visitors";
-import { getExchanges, ExchangeRecord, addRefund, getRefunds, RefundRecord, addExchange, deleteExchange, deleteRefund } from "@/lib/exchange";
+import { addRefund, getRefunds, deleteRefund, addExchange } from "@/lib/exchange";
 import { getNotes, deleteNoteByTransactionId, updateNote, completeNote } from "@/lib/notes";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { ProfileData } from "@/types/pos";
@@ -31,6 +30,8 @@ interface TransactionItem {
   name: string;
   quantity: number;
   price: number;
+  // Harga asli sebelum diskon (opsional, ada hanya pada transaksi berdiskon)
+  basePrice?: number;
   type: ItemType;
   sku?: string;
   purchasePrice?: number;
@@ -45,11 +46,25 @@ interface Transaction {
   date: string; // ISO string
   customer: string;
   total: number;
+  // Persen diskon keranjang saat transaksi (opsional)
+  discountPercent?: number;
   status: "completed" | "pending" | "cancelled" | "refunded";
   items: TransactionItem[];
-  discountPercent?: string;
-  discountAmount?: number;
 }
+
+// Saklar fitur Tukar/Refund - ubah ke true untuk menampilkan kembali tombol Tukar/Refund
+const TUKAR_FEATURE_ENABLED = false;
+
+// Tampilan ringkas untuk kartu transaksi (hanya tampilan - data asli tetap utuh)
+const formatCardDate = (iso: string) =>
+  new Date(iso).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+const formatCardTime = (iso: string) =>
+  new Date(iso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+// TRX-8986414-tkm2 -> 8986414 (ditampilkan sebagai #8986414)
+const shortTrxCode = (id: string) => {
+  const parts = String(id || '').split('-');
+  return parts.length >= 3 && parts[0] === 'TRX' ? parts[1] : String(id || '');
+};
 
 const BarcodeScanner = ({ onDetected, onStart }: { onDetected: (code: string) => void, onStart?: () => void }) => {
   const controlsRef = useRef<any | null>(null);
@@ -107,7 +122,7 @@ const BarcodeScanner = ({ onDetected, onStart }: { onDetected: (code: string) =>
   );
 };
 
-type TabValue = "all" | "completed" | "history";
+type TabValue = "all" | "completed";
 
 const TransactionHistory: React.FC = () => {
   const { toast } = useToast();
@@ -139,35 +154,23 @@ const TransactionHistory: React.FC = () => {
   const [returnQuantity, setReturnQuantity] = useState(1); // Qty yang akan dikembalikan/ditukar dari barang lama
 
   // State for delete confirmation (2 step)
-  const [deleteConfirm, setDeleteConfirm] = useState<{ transactionId: string; itemIndex: number; step: 1 | 2 } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ transactionId: string; itemIndex: number } | null>(null);
 
   // State for editing quantity
   const [editingItem, setEditingItem] = useState<{ transactionId: string; itemIndex: number; currentQty: number } | null>(null);
 
-  // State for exchange delete confirmation
-  const [exchangeToDelete, setExchangeToDelete] = useState<ExchangeRecord | null>(null);
-
-  // State for refund delete confirmation
-  const [refundToDelete, setRefundToDelete] = useState<RefundRecord | null>(null);
-
   // State for refund confirmation
   const [showRefundConfirm, setShowRefundConfirm] = useState(false);
 
-  // State for highlighted exchange (from navigation)
-  const [highlightedExchangeId, setHighlightedExchangeId] = useState<string | null>(null);
   // State for flashing card after undo refund
   const [flashingCard, setFlashingCard] = useState<{ transactionId: string; itemIndex: number } | null>(null);
   // State for undo refund confirmation (simple: transactionId + itemIndex)
   const [undoRefundConfirm, setUndoRefundConfirm] = useState<{ transactionId: string; itemIndex: number } | null>(null);
-  const location = useLocation();
-  const exchangeCardRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
 
   // Pagination state for "Item Terjual" tab
   const [itemTerjualPage, setItemTerjualPage] = useState(1);
   // Pagination state for "Transaksi" tab
   const [transaksiPage, setTransaksiPage] = useState(1);
-  // Pagination state for "Tukar" tab  
-  const [tukarPage, setTukarPage] = useState(1);
   const ITEMS_PER_PAGE = 25;
 
   // Refund/tukar hanya boleh dilakukan pada transaksi yang dibuat hari ini.
@@ -181,12 +184,7 @@ const TransactionHistory: React.FC = () => {
   useEffect(() => {
     setItemTerjualPage(1);
     setTransaksiPage(1);
-    setTukarPage(1);
   }, [searchQuery, dateRange]);
-
-  // Load transactions from IndexedDB (safe - won't crash)
-  const [exchangeHistory, setExchangeHistory] = useState<ExchangeRecord[]>([]);
-  const [refundHistory, setRefundHistory] = useState<RefundRecord[]>([]);
 
   const loadData = async () => {
     // Initialize IndexedDB and migrate from localStorage if needed (safe - won't crash)
@@ -207,51 +205,11 @@ const TransactionHistory: React.FC = () => {
         setTransactions(DUMMY_TRANSACTIONS as Transaction[]);
       }
     }
-    // Load history
-    setExchangeHistory(getExchanges());
-    setRefundHistory(getRefunds());
   };
 
   useEffect(() => {
     loadData();
   }, []);
-
-  // Also refresh when tab changes to history
-  useEffect(() => {
-    if (activeTab === 'history') {
-      setExchangeHistory(getExchanges());
-      setRefundHistory(getRefunds());
-    }
-  }, [activeTab]);
-
-  // Handle navigation state for highlighting exchange
-  useEffect(() => {
-    const state = location.state as { highlightExchangeId?: string; tab?: string } | null;
-    if (state?.highlightExchangeId) {
-      // Switch to history tab
-      if (state.tab === 'history') {
-        setActiveTab('history');
-      }
-      // Set highlighted exchange
-      setHighlightedExchangeId(state.highlightExchangeId);
-
-      // Scroll to the card after a short delay (wait for render)
-      setTimeout(() => {
-        const cardEl = exchangeCardRefs.current[state.highlightExchangeId!];
-        if (cardEl) {
-          cardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      }, 300);
-
-      // Remove highlight after 3 seconds
-      setTimeout(() => {
-        setHighlightedExchangeId(null);
-      }, 3000);
-
-      // Clear location state to prevent re-highlighting on refresh
-      window.history.replaceState({}, document.title);
-    }
-  }, [location.state]);
 
   const matchesDate = (iso: string) => {
     const d = iso.split("T")[0];
@@ -483,7 +441,6 @@ const TransactionHistory: React.FC = () => {
 
         if (matchingRefund) {
           deleteRefund(matchingRefund.id);
-          setRefundHistory(getRefunds()); // Refresh list
         }
       }
 
@@ -1165,179 +1122,51 @@ const TransactionHistory: React.FC = () => {
     setItemTerjualPage(1);
   }, []);
 
-  // Undo/Cancel exchange - revert stock and transactions (NEW LOGIC)
-  const undoExchange = async (exchange: ExchangeRecord) => {
-    const products = getProducts();
-
-    // 1. Revert stock: +newItem qty (barang baru dikembalikan ke stok), -originalItem qty (barang lama diambil kembali)
-    const exchangeNewSku = String(exchange.newItem.sku || '').trim().toUpperCase();
-    const exchangeOriginalSku = String(exchange.originalItem.sku || '').trim().toUpperCase();
-    let updatedProducts = products.map(p => {
-      const sku = String(p.sku || '').trim().toUpperCase();
-      if (sku === exchangeNewSku && p.stock !== undefined) {
-        return { ...p, stock: p.stock + exchange.newItem.quantity };
-      }
-      if (sku === exchangeOriginalSku && p.stock !== undefined) {
-        return { ...p, stock: p.stock - exchange.originalItem.quantity };
-      }
-      return p;
-    });
-    setProducts(updatedProducts);
-    window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
-
-    // 2. Find and DELETE the new transaction (created on exchange date for new item)
-    // AND also delete the Selisih Tukar adjustment transaction (ADJ- with EX- item)
-    const exchangeDate = new Date(exchange.date).toISOString().split('T')[0];
-
-    let updatedTransactions = transactions.filter(t => {
-      // Check if this is the exchange transaction (created on exchange date, has only the new item)
-      const txDate = t.date.split('T')[0];
-      if (txDate !== exchangeDate) return true; // Keep transactions from other dates
-
-      // Check if this transaction only has the new item with exact qty
-      if (t.items.length === 1 &&
-        t.items[0].sku === exchange.newItem.sku &&
-        t.items[0].quantity === exchange.newItem.quantity) {
-        // This is the exchange transaction, remove it
-        return false;
-      }
-
-      // Also check for Selisih Tukar adjustment transaction (ADJ- transactions with "Selisih Tukar:" item)
-      // Match by checking if the item name contains both original and new item names
-      if (t.id.startsWith('ADJ-') && t.items.length === 1 && t.items[0].name.startsWith('Selisih Tukar:')) {
-        // Check if this Selisih Tukar matches our exchange (item names should be included)
-        const selisihName = t.items[0].name;
-        if (selisihName.includes(exchange.originalItem.name) && selisihName.includes(exchange.newItem.name)) {
-          // This is the Selisih Tukar transaction for this exchange, remove it
-          return false;
-        }
-      }
-
-      return true;
-    });
-
-    // 3. Restore original item qty in the ORIGINAL transaction
-    if (exchange.originalTransactionId) {
-      updatedTransactions = updatedTransactions.map(t => {
-        if (t.id !== exchange.originalTransactionId) return t;
-
-        let newItems = [...t.items];
-
-        // Add back originalItem qty
-        const originalExchangeSku = String(exchange.originalItem.sku || '').trim().toUpperCase();
-        const oldItemIndex = newItems.findIndex(it => String(it.sku || '').trim().toUpperCase() === originalExchangeSku);
-        if (oldItemIndex >= 0) {
-          newItems[oldItemIndex] = {
-            ...newItems[oldItemIndex],
-            quantity: newItems[oldItemIndex].quantity + exchange.originalItem.quantity
-          };
-        } else {
-          // Item was fully removed, add it back
-          newItems.push({
-            name: exchange.originalItem.name,
-            sku: exchange.originalItem.sku,
-            price: exchange.originalItem.price,
-            quantity: exchange.originalItem.quantity,
-            type: 'product' as const
-          });
-        }
-
-        const totalAmount = newItems.reduce((sum, it) => sum + it.price * it.quantity, 0);
-        return { ...t, items: newItems, total: totalAmount, status: 'completed' as const };
-      });
-    }
-
-    setTransactions(updatedTransactions);
-    await safeSaveAllTransactions(updatedTransactions);
-
-    // 4. Delete exchange record
-    deleteExchange(exchange.id);
-    setExchangeHistory(getExchanges());
-
-    // 5. Show toast
-    toast({
-      title: "Tukar Dibatalkan",
-      description: `Omset dikembalikan ke semula. ${exchange.originalItem.name} (+${exchange.originalItem.quantity}), ${exchange.newItem.name} (stok +${exchange.newItem.quantity})`,
-    });
-
-    setExchangeToDelete(null);
-  };
-
-  // Handle delete refund - remove refund record and restore stock
-  const handleDeleteRefund = (refund: RefundRecord) => {
-    const products = getProducts();
-
-    // Restore stock: subtract the refunded quantity (because refund added it back).
-    // Negative stock is valid and is intentionally not clamped.
-    const refundSku = String(refund.item.sku || '').trim().toUpperCase();
-    const updatedProducts = products.map(p => {
-      if (String(p.sku || '').trim().toUpperCase() === refundSku && p.stock !== undefined) {
-        return { ...p, stock: p.stock - refund.item.quantity };
-      }
-      return p;
-    });
-    setProducts(updatedProducts);
-    window.dispatchEvent(new CustomEvent('pos:products:update', { detail: updatedProducts }));
-    // ★ Push stock to Sheet (bidirectional sync)
-    pushStockToSheet([{ sku: refund.item.sku, stock: updatedProducts.find((p: any) => String(p.sku || '').trim().toUpperCase() === refundSku)?.stock ?? 0 }]);
-
-    // Delete the refund record
-    deleteRefund(refund.id);
-
-    // Refresh refund history
-    setRefundHistory(getRefunds());
-
-    // Close dialog
-    setRefundToDelete(null);
-
-    toast({
-      title: "Refund Dibatalkan",
-      description: `${refund.item.name} (${refund.item.quantity} pcs) - Stok dikurangi kembali`,
-      variant: "default"
-    });
-  };
-
-
   return (
     <div className="bg-background h-screen flex flex-col overflow-hidden">
       <div className="container mx-auto px-2 sm:px-4 py-2 flex-1 flex flex-col min-h-0">
 
-        <div className="flex flex-wrap gap-2 mb-4 items-center">
-          <div className="relative flex-1 min-w-[180px] sm:min-w-[240px] max-w-xs">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-500" />
-            <input
-              type="text"
-              placeholder="KODE / NAMA"
-              className="w-full pl-12 pr-12 py-3 bg-gray-100 dark:bg-gray-800 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white dark:focus:bg-gray-700 transition-all font-medium"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery("")}
-                className="absolute right-4 top-1/2 -translate-y-1/2 p-1 bg-gray-400 hover:bg-gray-500 rounded-full transition-colors"
-              >
-                <X className="h-3 w-3 text-white" />
-              </button>
-            )}
-          </div>
-          <div className="relative">
-            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none" />
-            <input
-              type="date"
-              value={dateRange.start}
-              onChange={e => setDateRange({ start: e.target.value, end: e.target.value })}
-              className="w-36 pl-9 pr-3 py-3 bg-gray-100 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-            />
-          </div>
-        </div>
-
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)} className="flex-1 flex flex-col min-h-0">
-          <TabsList className="flex gap-2 mb-4 bg-transparent p-0 shrink-0">
-            <TabsTrigger value="completed" className="flex-1 py-3 px-4 text-sm font-semibold text-gray-500 bg-white border border-gray-200 rounded-xl transition-all duration-200 data-[state=active]:bg-gradient-to-r data-[state=active]:from-violet-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:shadow-purple-500/30 data-[state=active]:scale-[1.02] hover:border-purple-300 hover:text-purple-600">Terjual</TabsTrigger>
-            <TabsTrigger value="all" className="flex-1 py-3 px-4 text-sm font-semibold text-gray-500 bg-white border border-gray-200 rounded-xl transition-all duration-200 data-[state=active]:bg-gradient-to-r data-[state=active]:from-violet-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:shadow-purple-500/30 data-[state=active]:scale-[1.02] hover:border-purple-300 hover:text-purple-600">Transaksi</TabsTrigger>
-            <TabsTrigger value="history" className="flex-1 py-3 px-4 text-sm font-semibold text-gray-500 bg-white border border-gray-200 rounded-xl transition-all duration-200 data-[state=active]:bg-gradient-to-r data-[state=active]:from-violet-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:shadow-purple-500/30 data-[state=active]:scale-[1.02] hover:border-purple-300 hover:text-purple-600">History</TabsTrigger>
+          <TabsList className="flex w-full h-auto bg-gray-100 dark:bg-gray-800 rounded-full p-1 mb-4 shrink-0">
+            <TabsTrigger value="completed" className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-full text-sm font-bold transition-all text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow">
+              <ShoppingCart className="h-4 w-4" />
+              Terjual
+            </TabsTrigger>
+            <TabsTrigger value="all" className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-full text-sm font-bold transition-all text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 data-[state=active]:bg-green-500 data-[state=active]:text-white data-[state=active]:shadow">
+              <Receipt className="h-4 w-4" />
+              Transaksi
+            </TabsTrigger>
           </TabsList>
+
+          <div className="flex flex-wrap gap-2 mb-4 items-center shrink-0">
+            <div className="relative flex-1 min-w-[180px] sm:min-w-[240px] max-w-xs">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-500" />
+              <input
+                type="text"
+                placeholder="KODE / NAMA"
+                className="w-full pl-12 pr-12 py-3 bg-gray-100 dark:bg-gray-800 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white dark:focus:bg-gray-700 transition-all font-medium"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 p-1 bg-gray-400 hover:bg-gray-500 rounded-full transition-colors"
+                >
+                  <X className="h-3 w-3 text-white" />
+                </button>
+              )}
+            </div>
+            <div className="relative">
+              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none" />
+              <input
+                type="date"
+                value={dateRange.start}
+                onChange={e => setDateRange({ start: e.target.value, end: e.target.value })}
+                className="w-36 pl-9 pr-3 py-3 bg-gray-100 rounded-full text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+          </div>
 
           <div className="flex-1 overflow-y-auto pb-16 px-0.5">
             {/* Hari ini (default uses today's date via dateRange) */}
@@ -1352,26 +1181,42 @@ const TransactionHistory: React.FC = () => {
                     <div className="text-[10px] text-muted-foreground mb-2 px-1">
                       Menampilkan {startIndex + 1}-{Math.min(startIndex + ITEMS_PER_PAGE, filteredTransactions.length)} dari {filteredTransactions.length} transaksi
                     </div>
-                    {paginatedTransactions.map(t => (
+                    {paginatedTransactions.map(t => {
+                      const trxDiscountPct = (t as any).discountPercent as number | undefined;
+                      const hasTrxDiscount =
+                        (trxDiscountPct ?? 0) > 0 ||
+                        (t.items || []).some((it: any) => it?.basePrice != null && it.basePrice !== it.price);
+                      const trxDiscountLabel = trxDiscountPct
+                        ? `-${trxDiscountPct % 1 === 0 ? trxDiscountPct : parseFloat(trxDiscountPct.toFixed(2))}%`
+                        : 'Diskon';
+                      return (
                       <Card key={t.id} className="cursor-pointer hover:bg-accent/50 transition-colors" onClick={() => handleTransactionClick(t)}>
                         <CardContent className="p-4">
                           <div className="flex justify-between items-start">
-                            <div>
+                            <div className="min-w-0">
                               <p className="font-medium text-sm">{t.customer}</p>
-                              <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-1">
-                                 <span>{t.id} • {new Date(t.date).toLocaleString("id-ID")}</span>
+                              <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-1 mt-0.5">
+                                 <span>📅 {formatCardDate(t.date)} • {formatCardTime(t.date)}</span>
                                  {getRelativeDateBadge(t.date) && (
                                    <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${getRelativeDateBadgeClass(getRelativeDateBadge(t.date))}`}>
                                      {getRelativeDateBadge(t.date)}
                                    </span>
                                  )}
                                </p>
+                              <p className="text-[10px] text-muted-foreground/70 font-mono mt-0.5">#{shortTrxCode(t.id)}</p>
                             </div>
                             <div className="text-right">
                               <p className="font-bold text-amber-600 text-sm">{formatCurrency(t.total)}</p>
-                              <Badge variant={t.status === "completed" ? "default" : t.status === "pending" ? "secondary" : t.status === "cancelled" ? "destructive" : "outline"} className="mt-1 h-5 text-[10px]">
-                                {t.status === "completed" ? "Selesai" : t.status === "pending" ? "Pending" : t.status === "cancelled" ? "Batal" : "Refund"}
-                              </Badge>
+                              <div className="mt-1 flex justify-end items-center gap-1">
+                                {hasTrxDiscount && (
+                                  <Badge variant="outline" className="h-5 text-[10px] border-red-200 bg-red-50 text-red-600">
+                                    🏷️ {trxDiscountLabel}
+                                  </Badge>
+                                )}
+                                <Badge variant={t.status === "completed" ? "default" : t.status === "pending" ? "secondary" : t.status === "cancelled" ? "destructive" : "outline"} className="h-5 text-[10px]">
+                                  {t.status === "completed" ? "Selesai" : t.status === "pending" ? "Pending" : t.status === "cancelled" ? "Batal" : "Refund"}
+                                </Badge>
+                              </div>
                             </div>
                           </div>
                           <div className="mt-3 pt-2 border-t border-dashed">
@@ -1395,7 +1240,8 @@ const TransactionHistory: React.FC = () => {
                           </div>
                         </CardContent>
                       </Card>
-                    ))}
+                      );
+                    })}
 
                     {/* Pagination controls for Transaksi */}
                     {totalPages > 1 && (
@@ -1527,9 +1373,8 @@ const TransactionHistory: React.FC = () => {
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {paginatedItems.map(({ transaction, item, itemIndex }) => {
+                      {paginatedItems.map(({ transaction, item, itemIndex }, i) => {
                         const sku = item.sku || products.find((p: any) => p.name === item.name)?.sku || "-";
-                        const isDeleting = deleteConfirm?.transactionId === transaction.id && deleteConfirm?.itemIndex === itemIndex;
                         const isSelisihTukar = item.name.startsWith("Selisih Tukar:");
                         const isSelisihPositif = isSelisihTukar && item.price > 0;
                         const isSelisihNegatif = isSelisihTukar && item.price < 0;
@@ -1568,9 +1413,12 @@ const TransactionHistory: React.FC = () => {
                         // Check if this card should be flashing
                         const isFlashing = flashingCard?.transactionId === transaction.id && flashingCard?.itemIndex === itemIndex;
 
+                        // Sekat garis tipis: tampil setelah item terakhir dari satu transaksi
+                        const isLastOfGroup = i === paginatedItems.length - 1 || paginatedItems[i + 1].transaction.id !== transaction.id;
+
                         return (
+                          <React.Fragment key={`${transaction.id}-${itemIndex}`}>
                           <Card
-                            key={`${transaction.id}-${itemIndex}`}
                             className={`hover:border-primary transition-colors ${(item as any).refunded || (item as any).partiallyRefunded || (item as any).sameDayRefunded
                               ? 'bg-red-50 border-red-200'
                               : getCardClass()
@@ -1607,7 +1455,7 @@ const TransactionHistory: React.FC = () => {
                                       {isSelisihNegatif ? '' : ''}{formatCurrency(item.price * item.quantity)}
                                     </span>
                                     {/* Tombol Refund - Exchange feature disabled, disabled if already refunded */}
-                                    {isTransactionToday(transaction) && !isSelisihTukar && !(item as any).refunded && !(item as any).partiallyRefunded && !(item as any).sameDayRefunded && !(item as any).sameDayPartialRefund && (
+                                    {TUKAR_FEATURE_ENABLED && isTransactionToday(transaction) && !isSelisihTukar && !(item as any).refunded && !(item as any).partiallyRefunded && !(item as any).sameDayRefunded && !(item as any).sameDayPartialRefund && (
                                       <Button
                                         size="sm"
                                         variant="outline"
@@ -1750,26 +1598,6 @@ const TransactionHistory: React.FC = () => {
                                         <X className="h-3 w-3" />
                                       </Button>
                                     </div>
-                                  ) : isDeleting ? (
-                                    deleteConfirm.step === 1 ? (
-                                      <Button
-                                        size="sm"
-                                        variant="destructive"
-                                        className="h-7 text-xs"
-                                        onClick={() => setDeleteConfirm({ transactionId: transaction.id, itemIndex, step: 2 })}
-                                      >
-                                        Yakin?
-                                      </Button>
-                                    ) : (
-                                      <Button
-                                        size="sm"
-                                        variant="destructive"
-                                        className="h-7 text-xs bg-red-700 hover:bg-red-800"
-                                        onClick={() => deleteTransactionItem(transaction.id, itemIndex)}
-                                      >
-                                        HAPUS!
-                                      </Button>
-                                    )
                                   ) : (
                                     // Normal mode - show delete button only
                                     <div className="flex items-center gap-1">
@@ -1788,7 +1616,7 @@ const TransactionHistory: React.FC = () => {
                                         size="sm"
                                         variant="ghost"
                                         className="h-7 w-7 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
-                                        onClick={() => setDeleteConfirm({ transactionId: transaction.id, itemIndex, step: 1 })}
+                                        onClick={() => setDeleteConfirm({ transactionId: transaction.id, itemIndex })}
                                       >
                                         <Trash2 className="h-4 w-4" />
                                       </Button>
@@ -1798,6 +1626,14 @@ const TransactionHistory: React.FC = () => {
                               </div>
                             </CardContent>
                           </Card>
+                          {isLastOfGroup && (
+                            <div className="col-span-full flex items-center gap-3 py-1">
+                              <div className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
+                              <span className="text-[10px] text-muted-foreground whitespace-nowrap">{transaction.items.length} item • 1 transaksi</span>
+                              <div className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
+                            </div>
+                          )}
+                          </React.Fragment>
                         );
                       })}
                     </div >
@@ -1848,257 +1684,6 @@ const TransactionHistory: React.FC = () => {
                 ) : (
                   <div className="text-center py-8 text-muted-foreground">
                     Tidak ada transaksi selesai
-                  </div>
-                );
-              })()}
-            </TabsContent>
-
-            {/* History Tab - Exchanges & Refunds */}
-            <TabsContent value="history" className="space-y-6">
-              {(() => {
-                const filteredExchanges = exchangeHistory.filter(e => {
-                  if (!matchesDate(e.date)) return false;
-                  if (!searchQuery) return true;
-
-                  return (
-                    matchesLoose(e.originalItem.name, searchQuery) ||
-                    matchesLoose(e.originalItem.sku, searchQuery) ||
-                    matchesLoose(e.newItem.name, searchQuery) ||
-                    matchesLoose(e.newItem.sku, searchQuery) ||
-                    e.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                    e.originalTransactionId?.toLowerCase().includes(searchQuery.toLowerCase())
-                  );
-                });
-
-                const filteredRefunds = refundHistory.filter(r => {
-                  if (!matchesDate(r.date)) return false;
-                  if (!searchQuery) return true;
-
-                  return (
-                    matchesLoose(r.item.name, searchQuery) ||
-                    matchesLoose(r.item.sku, searchQuery) ||
-                    r.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                    r.transactionId?.toLowerCase().includes(searchQuery.toLowerCase())
-                  );
-                });
-
-                // Exchange feature disabled - only show refunds
-                const allActivity = [
-                  // ...filteredExchanges.map(ex => {
-                  //   const relevance = Math.max(
-                  //     getSearchRelevance(ex.originalItem.sku, searchQuery),
-                  //     getSearchRelevance(ex.newItem.sku, searchQuery)
-                  //   );
-                  //   return { type: 'exchange', data: ex, date: ex.date, relevance };
-                  // }),
-                  ...filteredRefunds.map(rf => {
-                    const relevance = getSearchRelevance(rf.item.sku, searchQuery);
-                    return { type: 'refund', data: rf, date: rf.date, relevance };
-                  })
-                ].sort((a, b) => {
-                  if (searchQuery) {
-                    if (b.relevance !== a.relevance) return b.relevance - a.relevance;
-                  }
-                  return new Date(b.date).getTime() - new Date(a.date).getTime();
-                });
-
-                const totalPages = Math.ceil(allActivity.length / ITEMS_PER_PAGE);
-                const startIndex = (tukarPage - 1) * ITEMS_PER_PAGE;
-                const paginatedActivity = allActivity.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-
-                return (
-                  <div className="space-y-6">
-                    {allActivity.length > 0 ? (
-                      <>
-                        <div className="text-[10px] text-muted-foreground mb-2 px-1">
-                          Menampilkan {startIndex + 1}-{Math.min(startIndex + ITEMS_PER_PAGE, allActivity.length)} dari {allActivity.length} baris riwayat
-                        </div>
-                        <div className="space-y-4">
-                          {paginatedActivity.map((item, idx) => {
-                            if (item.type === 'exchange') {
-                              const ex = item.data as any as ExchangeRecord;
-                              const isHighlighted = highlightedExchangeId === ex.id;
-                              return (
-                                <Card
-                                  key={ex.id}
-                                  ref={(el) => { exchangeCardRefs.current[ex.id] = el; }}
-                                  className={`overflow-hidden border-l-4 border-l-purple-500 shadow-sm transition-all duration-300 ${isHighlighted ? 'ring-4 ring-purple-400 ring-opacity-75 bg-purple-50' : ''}`}
-                                  style={isHighlighted ? { animation: 'slow-pulse 2s ease-in-out infinite' } : {}}
-                                >
-                                  <CardContent className="p-3 sm:p-4">
-                                    <div className="flex justify-between items-start mb-3">
-                                      <div className="text-xs text-muted-foreground font-medium flex items-center gap-1">
-                                        <RefreshCw className="h-3 w-3" /> Tukar: {new Date(ex.date).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' })}
-                                      </div>
-                                      <div className="text-[9px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground uppercase">
-                                        {ex.id}
-                                      </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-[1fr,auto,1fr] items-center gap-2 bg-muted/30 p-2 rounded-lg border border-dashed">
-                                      <div className="space-y-0.5">
-                                        <div className="text-[9px] text-red-600 font-bold uppercase">Dikembalikan</div>
-                                        <div className="text-xs font-semibold leading-tight line-clamp-2">{ex.originalItem.name}</div>
-                                        <div className="flex items-center gap-1.5">
-                                          <span className="text-[10px] text-muted-foreground">{ex.originalItem.quantity} pcs</span>
-                                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200 uppercase">{ex.originalItem.sku || '-'}</span>
-                                        </div>
-                                        {/* Tanggal Beli */}
-                                        <div className="text-[9px] text-blue-600 mt-1 flex items-center gap-1">
-                                          {(() => {
-                                            if (!ex.originalPurchaseDate) return null;
-                                            const purchaseDate = new Date(ex.originalPurchaseDate).toISOString().split('T')[0];
-                                            const exchangeDate = new Date(ex.date).toISOString().split('T')[0];
-                                            if (purchaseDate === exchangeDate) {
-                                              return <><Calendar className="h-3 w-3" /> Tanggal Beli: Di hari yg sama</>;
-                                            }
-                                            return <><Calendar className="h-3 w-3" /> Tanggal Beli: {new Date(ex.originalPurchaseDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</>;
-                                          })()}
-                                        </div>
-                                      </div>
-                                      <ArrowRight className="h-3.5 w-3.5 text-purple-500" />
-                                      <div className="space-y-0.5 text-right">
-                                        <div className="text-[9px] text-green-600 font-bold uppercase">Ditukar</div>
-                                        <div className="text-xs font-semibold leading-tight line-clamp-2">{ex.newItem.name}</div>
-                                        <div className="flex items-center justify-end gap-1.5">
-                                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200 uppercase">{ex.newItem.sku || '-'}</span>
-                                          <span className="text-[10px] text-muted-foreground">{ex.newItem.quantity} pcs</span>
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    <div className="mt-3 flex justify-between items-end">
-                                      <div className="flex items-center gap-2">
-                                        <div className="text-[9px] text-muted-foreground">
-                                          Ref: {ex.originalTransactionId || '-'}
-                                        </div>
-                                        {/* Cancel exchange button - opens dialog */}
-                                        <Button
-                                          size="sm"
-                                          variant="ghost"
-                                          className="h-6 px-2 text-[10px] text-red-500 hover:text-red-700 hover:bg-red-50"
-                                          onClick={() => setExchangeToDelete(ex)}
-                                        >
-                                          <Trash2 className="h-3 w-3 mr-1" />
-                                          Batalkan
-                                        </Button>
-                                      </div>
-                                      <div className="text-right">
-                                        <div className="text-[9px] text-muted-foreground uppercase font-bold">Selisih</div>
-                                        <div className={`text-xs font-bold ${ex.priceDifference > 0 ? 'text-amber-600' : ex.priceDifference < 0 ? 'text-green-600' : 'text-gray-500'}`}>
-                                          {ex.priceDifference > 0 ? '+' : ''}{formatCurrency(ex.priceDifference)}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </CardContent>
-                                </Card>
-                              );
-                            } else {
-                              const rf = item.data as RefundRecord;
-                              return (
-                                <Card key={rf.id} className="overflow-hidden border-l-4 border-l-purple-500 shadow-sm">
-                                  <CardContent className="p-3 sm:p-4">
-                                    {/* Header with status on left and purchase date on right */}
-                                    <div className="flex justify-between items-start mb-3">
-                                      {/* Left: Status with date */}
-                                      <div className="flex items-center gap-1.5">
-                                        <RotateCcw className="h-3.5 w-3.5 text-red-600" />
-                                        <span className="text-xs font-semibold text-red-600 uppercase">DIKEMBALIKAN</span>
-                                        <span className="text-xs text-muted-foreground">
-                                          {new Date(rf.date).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' })}
-                                        </span>
-                                      </div>
-                                      {/* Right: Tanggal Beli */}
-                                      {rf.originalPurchaseDate && (
-                                        <div className="text-[10px] text-blue-600 flex items-center gap-1">
-                                          <Calendar className="h-3 w-3" />
-                                          <span>Tanggal Beli: {new Date(rf.originalPurchaseDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    {/* Product name - smaller font size */}
-                                    <div className="text-sm font-bold leading-tight mb-2">{rf.item.name}</div>
-
-                                    {/* Quantity and SKU in inline badges */}
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-xs text-blue-600 font-semibold">{rf.item.quantity} pcs</span>
-                                      <span className="text-[10px] px-2 py-0.5 rounded font-bold text-slate-600 bg-slate-50 border border-slate-200 uppercase">
-                                        {rf.item.sku || 'N/A'}
-                                      </span>
-                                    </div>
-
-                                    {/* Footer with Batalkan button only */}
-                                    <div className="mt-3 flex justify-end">
-                                      <Button
-                                        size="sm"
-                                        variant="ghost"
-                                        className="h-7 px-3 text-xs text-red-500 hover:text-red-700 hover:bg-red-50 gap-1.5 font-medium"
-                                        onClick={() => setRefundToDelete(rf)}
-                                      >
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                        Batalkan
-                                      </Button>
-                                    </div>
-                                  </CardContent>
-                                </Card>
-                              );
-                            }
-                          })}
-                        </div>
-
-                        {/* Pagination controls for Tukar/History */}
-                        {totalPages > 1 && (
-                          <div className="flex items-center justify-center gap-2 mt-6 pt-2 border-t">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8 text-xs"
-                              onClick={() => setTukarPage(1)}
-                              disabled={tukarPage === 1}
-                            >
-                              Awal
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8 w-8 p-0"
-                              onClick={() => setTukarPage(p => Math.max(1, p - 1))}
-                              disabled={tukarPage === 1}
-                            >
-                              <ChevronLeft className="h-4 w-4" />
-                            </Button>
-                            <span className="text-xs font-medium px-2">
-                              {tukarPage} / {totalPages}
-                            </span>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8 w-8 p-0"
-                              onClick={() => setTukarPage(p => Math.min(totalPages, p + 1))}
-                              disabled={tukarPage === totalPages}
-                            >
-                              <ChevronRight className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8 text-xs"
-                              onClick={() => setTukarPage(totalPages)}
-                              disabled={tukarPage === totalPages}
-                            >
-                              Akhir
-                            </Button>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div className="py-12 text-center text-muted-foreground border rounded-xl bg-muted/10 flex flex-col items-center gap-2">
-                        <RotateCcw className="h-8 w-8 opacity-20" />
-                        <div className="font-medium">Tidak ada riwayat refund</div>
-                        <div className="text-xs">Ubah filter tanggal untuk mencari data lain</div>
-                      </div>
-                    )}
                   </div>
                 );
               })()}
@@ -2186,7 +1771,19 @@ const TransactionHistory: React.FC = () => {
                                 {sku}
                               </span>
                             </div>
-                            <p className="text-sm text-muted-foreground">{item.quantity} x {formatCurrency(item.price)}<Badge variant="outline" className="ml-2 text-xs">{item.type === 'product' ? 'Produk' : 'Jasa'}</Badge></p>
+                            <p className="text-sm text-muted-foreground">
+                              {item.quantity} x{' '}
+                              {item.basePrice !== undefined && item.basePrice !== item.price ? (
+                                <>
+                                  <s className="mr-1">{formatCurrency(item.basePrice)}</s>
+                                  <span className="text-red-500 font-medium">{formatCurrency(item.price)}</span>
+                                  <Badge variant="outline" className="ml-2 text-xs border-red-200 bg-red-50 text-red-600">↓ Diskon</Badge>
+                                </>
+                              ) : (
+                                formatCurrency(item.price)
+                              )}
+                              <Badge variant="outline" className="ml-2 text-xs">{item.type === 'product' ? 'Produk' : 'Jasa'}</Badge>
+                            </p>
                           </div>
                           <p className="font-medium">{formatCurrency(item.quantity * item.price)}</p>
                         </div>
@@ -2198,28 +1795,33 @@ const TransactionHistory: React.FC = () => {
                 <div className="space-y-1.5 bg-gray-50 dark:bg-gray-800/40 p-3 rounded-xl border border-gray-100 dark:border-gray-800">
                   {(() => {
                     const isSingleItem = selectedItemIndex !== null && selectedItemIndex >= 0 && selectedItemIndex < selectedTransaction.items.length;
-                    const subtotal = isSingleItem
-                      ? (selectedTransaction.items[selectedItemIndex].price * selectedTransaction.items[selectedItemIndex].quantity)
-                      : selectedTransaction.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-
-                    const hasDiscount = !isSingleItem && (selectedTransaction.discountAmount || 0) > 0;
+                    const items = isSingleItem ? [selectedTransaction.items[selectedItemIndex]] : selectedTransaction.items;
+                    // Harga asli (basePrice) vs harga akhir (setelah diskon)
+                    const subtotal = items.reduce((sum, item: any) => sum + (item.price * item.quantity), 0);
+                    const originalSubtotal = items.reduce((sum, item: any) => sum + ((item.basePrice ?? item.price) * item.quantity), 0);
+                    const discountRp = originalSubtotal - subtotal;
+                    const discountPct = selectedTransaction.discountPercent;
 
                     return (
                       <>
                         <div className="flex justify-between items-center text-sm">
                           <span className="text-muted-foreground">{isSingleItem ? 'Subtotal Item' : 'Subtotal'}</span>
-                          <span className={hasDiscount ? "line-through text-muted-foreground" : "font-semibold"}>
-                            {formatCurrency(subtotal)}
+                          <span className="font-semibold">
+                            {discountRp > 0 ? (
+                              <>
+                                <s className="mr-1 font-normal text-muted-foreground/70">{formatCurrency(originalSubtotal)}</s>
+                                {formatCurrency(subtotal)}
+                              </>
+                            ) : (
+                              formatCurrency(subtotal)
+                            )}
                           </span>
                         </div>
 
-                        {hasDiscount && (
-                          <div className="flex justify-between items-center text-sm py-1 px-2 bg-rose-50 dark:bg-rose-950/30 rounded-lg text-rose-600 dark:text-rose-400 font-medium border border-rose-100 dark:border-rose-900/50">
-                            <div className="flex items-center gap-1.5">
-                              <Tag className="h-3.5 w-3.5" />
-                              <span>Diskon ({selectedTransaction.discountPercent}%)</span>
-                            </div>
-                            <span>-{formatCurrency(selectedTransaction.discountAmount || 0)}</span>
+                        {discountRp > 0 && (
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-red-500">Diskon{discountPct ? ` ${discountPct % 1 === 0 ? discountPct : parseFloat(discountPct.toFixed(2))}%` : ''}</span>
+                            <span className="font-semibold text-red-500">-{formatCurrency(discountRp)}</span>
                           </div>
                         )}
 
@@ -2238,7 +1840,7 @@ const TransactionHistory: React.FC = () => {
                 <Button variant="outline" className="flex-1 flex items-center justify-center gap-2" onClick={handlePrintReceipt}>
                   <Printer className="h-4 w-4" /> Cetak Struk
                 </Button>
-                {selectedTransaction.status === "completed" && isTransactionToday(selectedTransaction) && (
+                {TUKAR_FEATURE_ENABLED && selectedTransaction.status === "completed" && isTransactionToday(selectedTransaction) && (
                   <Button variant="outline" className="flex-1 flex items-center justify-center gap-2" onClick={handleExchangeClick}>
                     <RotateCcw className="h-4 w-4" /> {(selectedItemIndex !== null && selectedItemIndex >= 0 && selectedItemIndex < selectedTransaction.items.length) ? 'Tukar Item Ini' : 'Tukar'}
                   </Button>
@@ -2751,36 +2353,45 @@ const TransactionHistory: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Cancel Exchange Confirmation Dialog */}
-      <Dialog open={!!exchangeToDelete} onOpenChange={(open) => !open && setExchangeToDelete(null)}>
+      {/* Refund Confirmation Dialog */}
+      {/* Dialog Konfirmasi Hapus Item */}
+      <Dialog open={!!deleteConfirm} onOpenChange={(open) => !open && setDeleteConfirm(null)}>
         <DialogContent className="max-w-sm">
-          <DialogHeader className="text-center">
-            <DialogTitle className="text-xl">Batalkan Tukar?</DialogTitle>
-            <DialogDescription className="text-center text-muted-foreground">
-              Tukar akan dibatalkan dan stok akan dikembalikan seperti semula
+          <DialogHeader>
+            <DialogTitle className="text-xl">Hapus Item?</DialogTitle>
+            <DialogDescription>
+              {(() => {
+                if (!deleteConfirm) return null;
+                const trx = transactions.find(t => t.id === deleteConfirm.transactionId);
+                const itm = trx?.items[deleteConfirm.itemIndex];
+                if (!itm) return null;
+                return (
+                  <>
+                    Item <span className="font-semibold text-foreground">{itm.name}</span> ({itm.quantity} pcs) akan dihapus dari transaksi dan stok akan dikembalikan.
+                  </>
+                );
+              })()}
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="flex gap-3 sm:justify-center mt-4">
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={() => setExchangeToDelete(null)}
-            >
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setDeleteConfirm(null)}>
               Batal
             </Button>
             <Button
               variant="destructive"
-              className="flex-1 gap-2"
-              onClick={() => exchangeToDelete && undoExchange(exchangeToDelete)}
+              onClick={() => {
+                if (deleteConfirm) {
+                  deleteTransactionItem(deleteConfirm.transactionId, deleteConfirm.itemIndex);
+                }
+              }}
             >
-              <Trash2 className="h-4 w-4" />
-              Ya, Batalkan
+              <Trash2 className="h-4 w-4 mr-1" />
+              Ya, Hapus
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Refund Confirmation Dialog */}
       <Dialog open={showRefundConfirm} onOpenChange={(open) => !open && setShowRefundConfirm(false)}>
         <DialogContent className="max-w-sm">
           <DialogHeader className="text-center">
@@ -2861,41 +2472,6 @@ const TransactionHistory: React.FC = () => {
             >
               <RotateCcw className="h-4 w-4" />
               Ya, Refund
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Refund Confirmation Dialog */}
-      <Dialog open={!!refundToDelete} onOpenChange={(open) => !open && setRefundToDelete(null)}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader className="text-center">
-            <DialogTitle className="text-xl">Batalkan Refund?</DialogTitle>
-            <DialogDescription className="text-center text-muted-foreground">
-              {refundToDelete && (
-                <>
-                  Anda akan membatalkan refund untuk <span className="font-semibold text-foreground">{refundToDelete.item.name}</span> sebanyak <span className="font-semibold text-foreground">{refundToDelete.item.quantity} pcs</span>.
-                  <br />
-                  <span className="text-xs mt-2 block">Stok akan dikurangi kembali dan refund akan dihapus dari riwayat.</span>
-                </>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="flex gap-3 sm:justify-center mt-4">
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={() => setRefundToDelete(null)}
-            >
-              Batal
-            </Button>
-            <Button
-              variant="destructive"
-              className="flex-1 gap-2"
-              onClick={() => refundToDelete && handleDeleteRefund(refundToDelete)}
-            >
-              <Trash2 className="h-4 w-4" />
-              Ya, Batalkan
             </Button>
           </DialogFooter>
         </DialogContent>
