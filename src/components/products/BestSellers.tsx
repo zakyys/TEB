@@ -8,7 +8,6 @@ import {
   PackageSearch,
   CalendarDays,
   Loader2,
-  FileSpreadsheet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -85,6 +84,61 @@ interface BestSellersProps {
   className?: string;
 }
 
+// Tambahkan sheet Barang Terlaris (Bulan ini / 2 Bulan / 3 Bulan) ke workbook Excel mana pun.
+// Dipakai oleh export manual di halaman ini dan oleh Laporan Harian (home.tsx).
+// Opsi sheetPrefix memberi awalan nama sheet, mis. "Terlaris " -> "Terlaris Bulan Ini".
+// wb sengaja di-typing any karena workbook bisa berasal dari paket xlsx atau xlsx-js-style.
+export const appendBestSellerSheets = (
+  wb: any,
+  transactions: any[],
+  now: Date,
+  opts?: { storeName?: string; sheetPrefix?: string }
+) => {
+  const store = opts?.storeName || "Toko";
+  const prefix = opts?.sheetPrefix ?? "";
+  const EXPORT_TOP = 100;
+  const header = ["Peringkat", "SKU", "Nama Barang", "Qty Terjual", "Omzet"];
+  const sectionRows = (label: string, list: AggItem[]): (string | number)[][] => [
+    [`========== ${label} ==========`],
+    header,
+    ...list.slice(0, EXPORT_TOP).map((item, idx) => [
+      idx + 1,
+      item.sku || "-",
+      item.name,
+      item.qty,
+      item.revenue,
+    ]),
+    [],
+  ];
+  (
+    [
+      { sheet: `${prefix}Bulan ini`, label: "Bulan ini", months: 1 },
+      { sheet: `${prefix}2 Bulan`, label: "2 Bulan", months: 2 },
+      { sheet: `${prefix}3 Bulan`, label: "3 Bulan", months: 3 },
+    ] as const
+  ).forEach(({ sheet, months }) => {
+    const start = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
+    const withYear = start.getFullYear() !== now.getFullYear();
+    const periodText = `${formatDateId(start, withYear)} - ${formatDateId(now, withYear)}`;
+    const rows: (string | number)[][] = [
+      [`Barang Terlaris - ${store}`],
+      [`Periode: ${periodText}`],
+      [],
+      ...sectionRows(
+        "TANPA SCREW/RING",
+        aggregateRanked(transactions, months, "exclude", now).ranked
+      ),
+      ...sectionRows(
+        "HANYA SCREW/RING",
+        aggregateRanked(transactions, months, "only", now).ranked
+      ),
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = [{ wch: 10 }, { wch: 16 }, { wch: 42 }, { wch: 12 }, { wch: 16 }];
+    XLSX.utils.book_append_sheet(wb, ws, sheet);
+  });
+};
+
 const BestSellers = ({ className = "" }: BestSellersProps) => {
   const storeName = getStoreName();
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -138,55 +192,8 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
     return "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400";
   };
 
-  // Export 3 sheet (Bulan ini / 2 Bulan / 3 Bulan). Tiap sheet berisi judul +
-  // periode di atas, lalu bagian TANPA SCREW/RING, pembatas, dan HANYA SCREW/RING.
-  // Setiap bagian hanya diisi 100 besar.
-  const EXPORT_TOP = 100;
-  const handleExportExcel = () => {
-    if (loading || ranked.length === 0) return;
-    const wb = XLSX.utils.book_new();
-    const header = ["Peringkat", "SKU", "Nama Barang", "Qty Terjual", "Omzet"];
-    const sectionRows = (label: string, list: AggItem[]): (string | number)[][] => [
-      [`========== ${label} ==========`],
-      header,
-      ...list.slice(0, EXPORT_TOP).map((item, idx) => [
-        idx + 1,
-        item.sku || "-",
-        item.name,
-        item.qty,
-        item.revenue,
-      ]),
-      [],
-    ];
-    (
-      [
-        { sheet: "Bulan ini", months: 1 },
-        { sheet: "2 Bulan", months: 2 },
-        { sheet: "3 Bulan", months: 3 },
-      ] as const
-    ).forEach(({ sheet, months }) => {
-      const start = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
-      const withYear = start.getFullYear() !== now.getFullYear();
-      const periodText = `${formatDateId(start, withYear)} - ${formatDateId(now, withYear)}`;
-      const rows: (string | number)[][] = [
-        [`Barang Terlaris - ${storeName}`],
-        [`Periode: ${periodText}`],
-        [],
-        ...sectionRows(
-          "TANPA SCREW/RING",
-          aggregateRanked(transactions, months, "exclude", now).ranked
-        ),
-        ...sectionRows(
-          "HANYA SCREW/RING",
-          aggregateRanked(transactions, months, "only", now).ranked
-        ),
-      ];
-      const ws = XLSX.utils.aoa_to_sheet(rows);
-      ws["!cols"] = [{ wch: 10 }, { wch: 16 }, { wch: 42 }, { wch: 12 }, { wch: 16 }];
-      XLSX.utils.book_append_sheet(wb, ws, sheet);
-    });
-    XLSX.writeFile(wb, `Barang Terlaris-${storeName}.xlsx`);
-  };
+  // Export Excel manual dihapus — data barang terlaris sudah otomatis masuk
+  // ke Laporan Harian (home.tsx) via appendBestSellerSheets().
 
   return (
     <div className={className}>
@@ -205,16 +212,6 @@ const BestSellers = ({ className = "" }: BestSellersProps) => {
           </p>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 px-2 border-green-200 text-green-600 hover:bg-green-50 hover:text-green-700 dark:border-green-900 dark:hover:bg-green-950"
-            onClick={handleExportExcel}
-            disabled={loading || ranked.length === 0}
-          >
-            <FileSpreadsheet className="h-4 w-4" />
-            <span className="text-xs font-semibold">Export EXCEL</span>
-          </Button>
           <Button
             variant="ghost"
             size="sm"

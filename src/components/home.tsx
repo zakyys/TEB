@@ -42,6 +42,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import * as XLSX from "xlsx-js-style";
 import { getNotes, getActiveNotes, getActiveNotesCount, addNote, completeNote, deleteNote, updateNote, Note, getActiveHutang, getTotalHutangAmount, clearNotes, clearHutang } from "@/lib/notes";
+import { appendBestSellerSheets } from "@/components/products/BestSellers";
 
 interface Transaction {
   id: string;
@@ -94,6 +95,8 @@ const Dashboard = () => {
   const [avgVisitorMonth, setAvgVisitorMonth] = useState(0);
   const [soldItemsPage, setSoldItemsPage] = useState(1);
   const [sendingToSheets, setSendingToSheets] = useState(false);
+  // Teks tahapan pengiriman laporan (Sheets → Rekap → Telegram)
+  const [sendStage, setSendStage] = useState('');
   const [sheetsSent, setSheetsSent] = useState(false);
   const [successPopupOpen, setSuccessPopupOpen] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
@@ -404,8 +407,7 @@ const Dashboard = () => {
   );
   // Gunakan definisi omzet yang sama dengan file Excel Dashboard:
   // jumlah bruto item terjual, tidak memasukkan transaksi adjustment tukar
-  // dan tidak menghitung item yang sudah direfund. Diskon ditampilkan
-  // terpisah di laporan Excel, sehingga tidak mengurangi angka omzet.
+  // dan tidak menghitung item yang sudah direfund.
   const getReportSalesTotal = (transactionList: Transaction[]) => transactionList
     .filter(t => !t.id.startsWith('ADJ-') && t.customer !== 'Tukar Barang')
     .reduce((transactionSum, t) => transactionSum + (t.items || [])
@@ -536,28 +538,6 @@ const Dashboard = () => {
           transactionId: t.id
         }));
     });
-
-  // Calculate total discount from today's transactions
-  const todayDiscountInfo = (() => {
-    let totalDiscountAmount = 0;
-    const discountDetails: { percent: number; amount: number }[] = [];
-
-    todayTransactions.forEach((t: any) => {
-      if (t.discountAmount && t.discountAmount > 0) {
-        totalDiscountAmount += t.discountAmount;
-        discountDetails.push({
-          percent: t.discountPercent || 0,
-          amount: t.discountAmount
-        });
-      }
-    });
-
-    return {
-      totalAmount: totalDiscountAmount,
-      details: discountDetails,
-      hasDiscount: totalDiscountAmount > 0
-    };
-  })();
 
   // Get week range in month (1-7, 8-14, 15-21, 22-end)
   const getWeekRangeInMonth = () => {
@@ -723,6 +703,7 @@ const Dashboard = () => {
     });
 
     setSendingToSheets(true);
+    setSendStage('Menyiapkan data...');
     try {
       // ═══════════════════════════════════════════
       // 1. KIRIM DATA PENJUALAN HARIAN KE SHEET
@@ -751,7 +732,7 @@ const Dashboard = () => {
         return sum + (isPelunasan && isFromPreviousDay ? (n.amount || 0) : 0);
       }, 0);
 
-      const kasHariIniForGas = totalSalesForGas - todayDiscountInfo.totalAmount - totalBelanjaForGas - totalHutangBaruForGas + totalPelunasanForGas - totalRefundForGas;
+      const kasHariIniForGas = totalSalesForGas - totalBelanjaForGas - totalHutangBaruForGas + totalPelunasanForGas - totalRefundForGas;
 
       const dailyPayload = {
         date: new Date().toLocaleDateString("id-ID", { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
@@ -796,12 +777,6 @@ const Dashboard = () => {
           total: visitorBefore12 + visitorAfter12,
           lost: visitorLostToday,
           lostList: lostDescriptions
-        },
-        // Discount info from today's transactions
-        discount: {
-          totalAmount: todayDiscountInfo.totalAmount,
-          details: todayDiscountInfo.details,
-          hasDiscount: todayDiscountInfo.hasDiscount
         },
         // Exchange difference info (total selisih harga dari penukaran hari ini)
         // Positive = customer paid more (tambah bayar), Negative = store gave refund (kembalian)
@@ -904,7 +879,7 @@ const Dashboard = () => {
         }
       };
 
-      console.log("[GAS] Sending daily payload with fullBackup to:", currentConfig.gasUrl);
+      console.log("[GAS] Daily payload with fullBackup prepared for:", currentConfig.gasUrl);
       console.log("[DEBUG] fullBackup summary:", {
         products: dailyPayload.fullBackup.data.products?.length || 0,
         transactions: dailyPayload.fullBackup.data.transactions?.length || 0,
@@ -913,12 +888,7 @@ const Dashboard = () => {
         notes: dailyPayload.fullBackup.data.notes?.length || 0,
         payloadSize: JSON.stringify(dailyPayload).length + " bytes"
       });
-      await fetch(currentConfig.gasUrl, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(dailyPayload)
-      });
+      // Fetch GAS dikirim di bawah (setelah Excel & Backup mulai paralel)
 
       // ═══════════════════════════════════════════
       // 2. KIRIM REKAP BULANAN (BARANG TERLARIS + TAMU)
@@ -1093,6 +1063,8 @@ const Dashboard = () => {
         .map(([category, total]) => ({ category, total }))
         .sort((a, b) => b.total - a.total); // Terbesar dulu
 
+      // Payload rekap bulanan hanya disiapkan - pengirimannya menyusul bergantian setelah Harian
+      let monthlyPayloadJson: string | null = null;
       if (monthlyItems.length > 0 || monthlyExchangesFormatted.length > 0 || getNotes().length > 0) { // Send if items, exchanges, OR notes exist
         const monthlyPayload = {
           action: "monthlyRecap",
@@ -1135,12 +1107,7 @@ const Dashboard = () => {
           trxCount: i.transactionCount
         })));
 
-        await fetch(currentConfig.gasUrl, {
-          method: "POST",
-          mode: "no-cors",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(monthlyPayload)
-        });
+        monthlyPayloadJson = JSON.stringify(monthlyPayload);
       }
 
       // ═══════════════════════════════════════════
@@ -1162,6 +1129,8 @@ const Dashboard = () => {
 
       // Format tanggal untuk nama file
       const dateForFile = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      // Nama toko untuk nama file (spasi jadi underscore, karakter ilegal dibuang)
+      const storeNameForFile = (getStoreName().replace(/[\\/:*?"<>|]+/g, "").trim().replace(/\s+/g, "_")) || "Toko";
       const tanggalHariIni = now.toLocaleDateString('id-ID', {
         weekday: 'long',
         day: 'numeric',
@@ -1176,7 +1145,13 @@ const Dashboard = () => {
          Di bawah ini hanya logic pengiriman FILE BACKUP.
       */
 
-      try {
+      // Excel & Backup dikirim PARALEL bersama Google Sheets (server berbeda - tidak mungkin tabrakan tulis)
+      // PENTING: file Excel TIDAK langsung di-download di sini - download ditunda sampai SEMUA pengiriman selesai,
+      // supaya dialog download/share tidak membuka & mengeluarkan aplikasi saat pengiriman lain masih berjalan.
+      let xlsxBlobForDownload: Blob | null = null;
+      let xlsxFileNameForDownload = '';
+      const telegramPromise = (async () => {
+        try {
         // ═══════════════════════════════════════════
         // FILE: Laporan Harian (XLSX) - Format sama seperti Google Sheet (tanpa icon)
         // ═══════════════════════════════════════════
@@ -1220,7 +1195,6 @@ const Dashboard = () => {
 
         // Summary rows data
         const totalRefundXlsx = refundsToday.reduce((sum, r) => sum + (r.item.quantity * r.item.price), 0);
-        const totalDiscountXlsx = todayDiscountInfo.totalAmount;
         const todayStr = new Date().toISOString().split('T')[0];
         const todayNotes = getNotes().filter((n: any) => {
           const creationDate = n.date.split('T')[0];
@@ -1242,8 +1216,8 @@ const Dashboard = () => {
           return sum + (isPelunasan && isFromPreviousDay ? (n.amount || 0) : 0);
         }, 0);
 
-        // KAS HARI INI = Penjualan - Diskon - Belanja - HutangBaru + PelunasanHutang - Refund
-        const kasHariIni = totalSalesXlsx - totalDiscountXlsx - totalBelanjaKasir - totalHutangBaruXlsx + totalPelunasanHutangXlsx - totalRefundXlsx;
+        // KAS HARI INI = Penjualan - Belanja - HutangBaru + PelunasanHutang - Refund
+        const kasHariIni = totalSalesXlsx - totalBelanjaKasir - totalHutangBaruXlsx + totalPelunasanHutangXlsx - totalRefundXlsx;
 
         salesRows.push(['', '', 'TOTAL :', totalSalesXlsx]);
 
@@ -1414,20 +1388,24 @@ const Dashboard = () => {
         });
         XLSX.utils.book_append_sheet(wb, wsVisitors, "Data Pengunjung");
 
+        // --- SHEET: BARANG TERLARIS (3 periode, sama persis dengan menu Barang Terlaris) ---
+        try {
+          appendBestSellerSheets(wb, transactions, now, {
+            storeName: getStoreName(),
+            sheetPrefix: 'Terlaris ',
+          });
+        } catch (terlarisError) {
+          console.error('Gagal menambah sheet barang terlaris:', terlarisError);
+        }
+
         // --- Kirim 1 file XLSX ke Telegram ---
         const xlsxBuffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
         const xlsxBlob = new Blob([xlsxBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-        const xlsxFileName = `Laporan-Harian-${dateForFile}.xlsx`;
+        const xlsxFileName = `Laporan-Harian-${storeNameForFile}-${dateForFile}.xlsx`;
 
-        // Auto-download ke device kasir
-        const downloadUrl = URL.createObjectURL(xlsxBlob);
-        const downloadLink = document.createElement('a');
-        downloadLink.href = downloadUrl;
-        downloadLink.download = xlsxFileName;
-        document.body.appendChild(downloadLink);
-        downloadLink.click();
-        document.body.removeChild(downloadLink);
-        URL.revokeObjectURL(downloadUrl);
+        // Auto-download DITUNDA - file disimpan dulu, di-download belakangan setelah semua terkirim
+        xlsxBlobForDownload = xlsxBlob;
+        xlsxFileNameForDownload = xlsxFileName;
 
         const formData1 = new FormData();
         formData1.append('chat_id', TELEGRAM_CHAT_ID);
@@ -1480,8 +1458,49 @@ const Dashboard = () => {
           body: formData3
         });
 
-      } catch (telegramError) {
-        console.error("Error sending to Telegram:", telegramError);
+        } catch (telegramError) {
+          console.error("Error sending to Telegram:", telegramError);
+        }
+      })();
+
+      // ═══════════════════════════════════════════
+      // KIRIM KE GOOGLE SHEETS (berurutan: Harian dulu, baru Rekap - aman dari tabrakan tulis)
+      // ═══════════════════════════════════════════
+      setSendStage('Kirim Sheets...');
+      await fetch(currentConfig.gasUrl, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(dailyPayload)
+      });
+
+      if (monthlyPayloadJson) {
+        setSendStage('Kirim Rekap...');
+        await fetch(currentConfig.gasUrl, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "application/json" },
+          body: monthlyPayloadJson
+        });
+      }
+
+      setSendStage('Upload Telegram...');
+      await telegramPromise;
+
+      // ═══════════════════════════════════════════
+      // SEMUA PENGIRIMAN SELESAI → baru auto-download Excel ke device kasir
+      // (mencegah dialog download/share membuka & mengeluarkan aplikasi di tengah proses)
+      // ═══════════════════════════════════════════
+      if (xlsxBlobForDownload) {
+        setSendStage('Download Excel...');
+        const downloadUrl = URL.createObjectURL(xlsxBlobForDownload);
+        const downloadLink = document.createElement('a');
+        downloadLink.href = downloadUrl;
+        downloadLink.download = xlsxFileNameForDownload;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        URL.revokeObjectURL(downloadUrl);
       }
 
       // Save sent date and time
@@ -1500,6 +1519,7 @@ const Dashboard = () => {
       alert("Gagal mengirim data: " + error);
     } finally {
       setSendingToSheets(false);
+      setSendStage('');
     }
   };
 
@@ -2038,7 +2058,7 @@ const Dashboard = () => {
               {sendingToSheets ? (
                 <>
                   <span className="animate-spin">⏳</span>
-                  <span>Mengirim data...</span>
+                  <span>{sendStage || 'Mengirim data...'}</span>
                 </>
               ) : (
                 <>
