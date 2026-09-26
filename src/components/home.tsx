@@ -339,7 +339,7 @@ const Dashboard = () => {
         content: newNoteContent.trim(),
         type: newNoteType,
         customerName: newNoteType === 'hutang' ? newNoteCustomerName.trim() : undefined,
-        amount: (newNoteType === 'hutang' || newNoteType === 'belanja') && parsedAmount ? parsedAmount : undefined,
+        amount: (newNoteType === 'hutang' || newNoteType === 'belanja' || newNoteType === 'transfer' || newNoteType === 'pengeluaran') && parsedAmount ? parsedAmount : undefined,
         editedAt: new Date().toISOString()
       });
       setEditNoteId(null);
@@ -350,7 +350,7 @@ const Dashboard = () => {
         content: newNoteContent.trim(),
         type: newNoteType,
         customerName: newNoteType === 'hutang' ? newNoteCustomerName.trim() : undefined,
-        amount: (newNoteType === 'hutang' || newNoteType === 'belanja') && parsedAmount ? parsedAmount : undefined,
+        amount: (newNoteType === 'hutang' || newNoteType === 'belanja' || newNoteType === 'transfer' || newNoteType === 'pengeluaran') && parsedAmount ? parsedAmount : undefined,
         priority: 'normal'
       });
     }
@@ -359,7 +359,7 @@ const Dashboard = () => {
     setNewNoteContent("");
     setNewNoteCustomerName("");
     setNewNoteAmount("");
-    setNewNoteType("hutang");
+    setNewNoteType("pengingat");
     setAddNoteDialogOpen(false);
     refreshNotes();
     setNotesDialogOpen(true);
@@ -2299,7 +2299,11 @@ const Dashboard = () => {
                         ? 'bg-red-50 border-red-200 shadow-sm'
                         : note.type === 'belanja'
                           ? 'bg-green-50 border-green-200 shadow-sm'
-                          : 'bg-blue-50 border-blue-200 shadow-sm'
+                          : note.type === 'transfer'
+                            ? 'bg-indigo-50 border-indigo-200 shadow-sm'
+                            : note.type === 'pengeluaran'
+                              ? 'bg-orange-50 border-orange-200 shadow-sm'
+                              : 'bg-blue-50 border-blue-200 shadow-sm'
                       }`}
                   >
                     {/* 1. Header Row (Labels Left, Actions Right) */}
@@ -2309,9 +2313,13 @@ const Dashboard = () => {
                           ? 'bg-red-200 text-red-800'
                           : note.type === 'belanja'
                             ? 'bg-green-200 text-green-800'
-                            : 'bg-blue-200 text-blue-800'
+                            : note.type === 'transfer'
+                              ? 'bg-indigo-200 text-indigo-800'
+                              : note.type === 'pengeluaran'
+                                ? 'bg-orange-200 text-orange-800'
+                                : 'bg-blue-200 text-blue-800'
                           }`}>
-                          {note.type === 'hutang' ? '💰 Hutang' : note.type === 'belanja' ? '🛒 Belanja' : '📝 Catatan'}
+                          {note.type === 'hutang' ? '💰 Hutang' : note.type === 'belanja' ? '🛒 Belanja' : note.type === 'transfer' ? '💸 Transfer' : note.type === 'pengeluaran' ? '🧾 Pengeluaran' : '📝 Catatan'}
                         </span>
 
                         {note.completed && (
@@ -2362,8 +2370,14 @@ const Dashboard = () => {
 
                         <div className="flex-1 h-[1px] bg-gray-200/50" />
 
-                        {(note.type === 'hutang' || note.type === 'belanja') && note.amount && (
-                          <div className={`text-[13px] font-black ${note.type === 'hutang' ? 'text-red-600 bg-red-100/80 border-red-200/50' : 'text-green-600 bg-green-100/80 border-green-200/50'} px-2 py-0.5 rounded border shadow-sm leading-none shrink-0`}>
+                        {(note.type === 'hutang' || note.type === 'belanja' || note.type === 'transfer' || note.type === 'pengeluaran') && note.amount && (
+                          <div className={`text-[13px] font-black ${note.type === 'hutang'
+                            ? 'text-red-600 bg-red-100/80 border-red-200/50'
+                            : note.type === 'belanja'
+                              ? 'text-green-600 bg-green-100/80 border-green-200/50'
+                              : note.type === 'transfer'
+                                ? 'text-indigo-600 bg-indigo-100/80 border-indigo-200/50'
+                                : 'text-orange-600 bg-orange-100/80 border-orange-200/50'} px-2 py-0.5 rounded border shadow-sm leading-none shrink-0`}>
                             {formatCurrency(note.amount)}
                           </div>
                         )}
@@ -2376,7 +2390,13 @@ const Dashboard = () => {
                         {note.type === 'hutang' ? (
                           note.content
                         ) : (
-                          note.type === 'belanja' ? 'Kebutuhan belanja harian' : 'Catatan pribadi'
+                          note.type === 'belanja'
+                            ? 'Kebutuhan belanja harian'
+                            : note.type === 'transfer'
+                              ? 'Uang masuk via transfer'
+                              : note.type === 'pengeluaran'
+                                ? 'Pengeluaran operasional'
+                                : 'Catatan pribadi'
                         )}
                       </div>
                     </div>
@@ -2395,30 +2415,42 @@ const Dashboard = () => {
               <div className="text-[11px] font-bold text-gray-400 flex items-center gap-1.5 uppercase tracking-wider">
                 <Plus className="h-3 w-3" /> Tambah Catatan Baru :
               </div>
-              <div className="flex gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <Button
                   variant="outline"
                   size="sm"
-                  className="flex-1 text-[10px] h-9 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 font-bold"
+                  className="text-[10px] h-9 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 font-bold"
                   onClick={() => {
                     setNewNoteType('pengingat');
                     setAddNoteDialogOpen(true);
                     setNotesDialogOpen(false);
                   }}
                 >
-                  📝 CATATAN
+                  🔔 PENGINGAT
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
-                  className="flex-1 text-[10px] h-9 bg-green-50 border-green-200 text-green-700 hover:bg-green-100 font-bold"
+                  className="text-[10px] h-9 bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 font-bold"
                   onClick={() => {
-                    setNewNoteType('belanja');
+                    setNewNoteType('transfer');
                     setAddNoteDialogOpen(true);
                     setNotesDialogOpen(false);
                   }}
                 >
-                  🛒 BELANJA
+                  💸 TRANSFER
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-[10px] h-9 bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 font-bold"
+                  onClick={() => {
+                    setNewNoteType('pengeluaran');
+                    setAddNoteDialogOpen(true);
+                    setNotesDialogOpen(false);
+                  }}
+                >
+                  🧾 PENGELUARAN
                 </Button>
               </div>
             </div>
@@ -2605,15 +2637,19 @@ const Dashboard = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="pengingat">🔔 Pengingat</SelectItem>
-                    <SelectItem value="belanja">🛒 Belanja Harian</SelectItem>
+                    <SelectItem value="transfer">💸 Transfer Masuk</SelectItem>
+                    <SelectItem value="pengeluaran">🧾 Pengeluaran</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
-              {/* Amount (for belanja) with Rp prefix */}
-              {newNoteType === 'belanja' && (
+              {/* Amount (belanja/transfer/pengeluaran) - aturan Z-POS: transfer wajib nominal, pengeluaran wajib nominal */}
+              {(newNoteType === 'belanja' || newNoteType === 'transfer' || newNoteType === 'pengeluaran') && (
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Total Belanja</label>
+                  <label className="text-sm font-medium">
+                    {newNoteType === 'belanja' ? 'Total Belanja' : newNoteType === 'transfer' ? 'Nominal Transfer' : 'Total Pengeluaran'}
+                    {(newNoteType === 'transfer' || newNoteType === 'pengeluaran') && <span className="text-red-500"> *</span>}
+                  </label>
                   <div className="flex items-center border rounded-md overflow-hidden focus-within:ring-2 focus-within:ring-purple-500">
                     <span className="px-3 py-2 bg-gray-100 border-r text-sm text-gray-600 font-medium">Rp</span>
                     <input
@@ -2633,13 +2669,19 @@ const Dashboard = () => {
                 </div>
               )}
 
-              {/* Content */}
+              {/* Content - opsional untuk transfer (ala Z-POS), wajib untuk lainnya */}
               <div className="space-y-2">
-                <label className="text-sm font-medium">Catatan</label>
+                <label className="text-sm font-medium">
+                  {newNoteType === 'transfer' ? 'Keterangan (Opsional)' : newNoteType === 'pengeluaran' ? 'Keterangan Pengeluaran' : 'Catatan'}
+                </label>
                 <Textarea
                   value={newNoteContent}
                   onChange={(e) => setNewNoteContent(e.target.value)}
-                  placeholder="Isi catatan..."
+                  placeholder={newNoteType === 'transfer'
+                    ? 'CONTOH: TRANSFER DARI PELANGGAN'
+                    : newNoteType === 'pengeluaran'
+                      ? 'CONTOH: BAYAR PAKET COD'
+                      : 'Isi catatan...'}
                   rows={3}
                 />
               </div>
@@ -2660,7 +2702,7 @@ const Dashboard = () => {
               <Button
                 className="bg-purple-600 hover:bg-purple-700"
                 onClick={handleSaveNote}
-                disabled={!newNoteContent.trim()}
+                disabled={(newNoteType !== 'transfer' && !newNoteContent.trim()) || ((newNoteType === 'transfer' || newNoteType === 'pengeluaran') && !(newNoteAmount && parseInt(newNoteAmount.replace(/\./g, '')) > 0))}
               >
                 {editNoteId ? 'Simpan Perubahan' : 'Simpan'}
               </Button>

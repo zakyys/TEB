@@ -4,7 +4,7 @@ export interface Note {
     id: string;
     date: string; // ISO string - tanggal dibuat
     content: string;
-    type: 'hutang' | 'pengingat' | 'belanja' | 'lainnya';
+    type: 'hutang' | 'pengingat' | 'belanja' | 'lainnya' | 'transfer' | 'pengeluaran';
     customerName?: string; // Nama pelanggan (untuk hutang)
     amount?: number; // Jumlah hutang (opsional)
     priority: 'normal' | 'penting';
