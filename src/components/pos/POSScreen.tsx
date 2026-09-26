@@ -36,7 +36,9 @@ import {
   Download,
   CheckCircle,
   ScanBarcode,
+  Tag,
 } from "lucide-react";
+import DiscountUnlockDialog, { formatDiscountPercent } from "@/components/pos/DiscountUnlockDialog";
 import { EscPos } from '@tillpos/xml-escpos-helper';
 import html2canvas from 'html2canvas';
 import { BrowserMultiFormatReader } from '@zxing/browser';
@@ -236,7 +238,12 @@ const POSScreen = () => {
   const clearCart = usePosStore((s) => s.clearCart);
   // Diskon keranjang aktif? (diatur di halaman Keranjang)
   const discountPercent = usePosStore((s) => s.discountPercent);
+  const clearDiscount = usePosStore((s) => s.clearDiscount);
   const isDiscountActive = discountPercent > 0;
+  // UX diskon: barang yang box harganya di-tap saat diskon aktif -> dialog panduan
+  const [unlockTarget, setUnlockTarget] = useState<{ id: string; name: string } | null>(null);
+  // Id item yang box harganya akan difokuskan setelah diskon dihapus
+  const [focusItemId, setFocusItemId] = useState<string | null>(null);
 
   // Floating cart bottom sheet state (for mobile)
   const [showMobileCart, setShowMobileCart] = useState(false);
@@ -330,6 +337,10 @@ const POSScreen = () => {
   const addToCart = (product: Product) => {
     // No stock validation - allow negative stock
     addToCartStore(product);
+    // UX diskon: kasir perlu tahu barang baru ikut ke-diskon-kan (harganya bukan harga hafalan)
+    if (isDiscountActive) {
+      toast({ description: `${product.name} masuk keranjang dengan diskon ${formatDiscountPercent(discountPercent)}%` });
+    }
   };
 
   // Update item quantity in cart
@@ -501,6 +512,36 @@ const POSScreen = () => {
             />
           )}
 
+          {/* Badge status diskon — kasir selalu lihat status walau pindah-pindah menu */}
+          {isDiscountActive && (
+            <div className="flex items-center gap-2 mb-2 p-2.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900">
+              <Tag className="h-4 w-4 text-red-500 flex-shrink-0" />
+              <span className="text-xs font-semibold text-red-600 dark:text-red-400 flex-1 leading-snug">
+                Diskon {formatDiscountPercent(discountPercent)}% aktif — semua harga otomatis menyesuaikan
+              </span>
+              <button
+                onClick={clearDiscount}
+                className="text-[10px] font-bold bg-red-500 hover:bg-red-600 text-white rounded-full px-3 py-1.5 flex-shrink-0 active:scale-95 transition-transform"
+              >
+                HAPUS
+              </button>
+            </div>
+          )}
+          {/* Dialog panduan: tap box harga terkunci -> konfirmasi hapus diskon */}
+          <DiscountUnlockDialog
+            open={unlockTarget !== null}
+            onOpenChange={(o) => { if (!o) setUnlockTarget(null); }}
+            itemName={unlockTarget?.name ?? null}
+            discountPercent={discountPercent}
+            onConfirm={() => {
+              clearDiscount();
+              const id = unlockTarget?.id ?? null;
+              setUnlockTarget(null);
+              if (id) setFocusItemId(id);
+              toast({ description: "Diskon dinonaktifkan — silakan edit harga" });
+            }}
+          />
+
           <div className="flex items-center gap-2 mb-1">
             {/* Search Bar - Elongated */}
             <div className="relative flex-1 max-w-lg">
@@ -667,10 +708,18 @@ const POSScreen = () => {
                               type="text"
                               inputMode="numeric"
                               placeholder="0"
-                              disabled={isDiscountActive}
-                              title={isDiscountActive ? 'Harga terkunci saat diskon aktif - hapus diskon di halaman Keranjang untuk mengubah' : 'Ubah harga item di keranjang'}
+                              readOnly={isDiscountActive}
                               value={editingPrices[item.id] !== undefined ? editingPrices[item.id] : (inCart?.price ?? item.price).toLocaleString('id-ID')}
-                              onClick={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (isDiscountActive) setUnlockTarget({ id: item.id, name: item.name });
+                              }}
+                              ref={el => {
+                                if (el && focusItemId === item.id) {
+                                  el.focus();
+                                  setFocusItemId(null);
+                                }
+                              }}
                               onFocus={(e) => {
                                 (e.target as HTMLInputElement).select();
                                 setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
@@ -688,8 +737,8 @@ const POSScreen = () => {
                                   return next;
                                 });
                               }}
-                              className={`w-24 px-2 py-1 h-8 text-right text-sm focus:outline-none ${isDiscountActive ? 'text-red-600 bg-red-50 cursor-not-allowed' : 'focus:ring-1 focus:ring-amber-400'}`}
-                              aria-label="Ubah harga item di keranjang"
+                              className={`w-24 px-2 py-1 h-8 text-right text-sm focus:outline-none ${isDiscountActive ? 'text-red-600 bg-red-50 cursor-pointer' : 'focus:ring-1 focus:ring-amber-400'}`}
+                              aria-label={isDiscountActive ? 'Harga terkunci diskon — tap untuk hapus diskon dan edit harga' : 'Ubah harga item di keranjang'}
                             />
                           </div>
                         </div>

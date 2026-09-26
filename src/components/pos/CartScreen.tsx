@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { getFromLS, saveToLS, LS_KEYS, formatCurrency, getRelativeDateBadgeClass } from "@/lib/utils";
 import { getProducts, setProducts as setCachedProducts, pushStockToSheet } from "@/lib/productCache";
 import { Button } from "@/components/ui/button";
-import { Minus, Plus, ShoppingCart, Trash2, CreditCard } from "lucide-react";
+import { Minus, Plus, ShoppingCart, Trash2, CreditCard, Tag } from "lucide-react";
+import DiscountUnlockDialog, { formatDiscountPercent } from "@/components/pos/DiscountUnlockDialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CheckCircle, Download, Check } from "lucide-react";
@@ -42,6 +43,20 @@ const CartScreen = () => {
   const [lastTransactionTotal, setLastTransactionTotal] = useState(0);
   // Konfirmasi hapus barang dari keranjang
   const [itemToDelete, setItemToDelete] = useState<CartItem | null>(null);
+
+  // UX diskon: barang yang box harganya di-tap saat diskon aktif -> dialog panduan
+  const [unlockTarget, setUnlockTarget] = useState<CartItem | null>(null);
+  // Id item yang box harganya akan difokuskan setelah diskon dihapus
+  const [focusItemId, setFocusItemId] = useState<string | null>(null);
+
+  // UX diskon: konfirmasi hapus diskon dari dialog, lalu fokus ke box harga barang tsb
+  const confirmUnlockDiscount = () => {
+    clearDiscount();
+    const id = unlockTarget?.id ?? null;
+    setUnlockTarget(null);
+    if (id) setFocusItemId(id);
+    toast({ description: "Diskon dinonaktifkan — silakan edit harga" });
+  };
 
   // Hutang (Debt) states
   const [isHutangMode, setIsHutangMode] = useState(false);
@@ -297,6 +312,29 @@ const CartScreen = () => {
         </Button>
         <span className="font-bold text-lg flex items-center ml-2"><ShoppingCart className="mr-2 h-5 w-5" />Keranjang</span>
       </div>
+      {/* Badge status diskon — selalu terlihat walau section diskon di bawah tidak terlihat */}
+      {isDiscountActive && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-red-50 dark:bg-red-950/40 border-b border-red-200 dark:border-red-900">
+          <Tag className="h-3.5 w-3.5 text-red-500 flex-shrink-0" />
+          <span className="text-xs font-semibold text-red-600 dark:text-red-400 flex-1">
+            Diskon {formatDiscountPercent(discountPercent)}% aktif — harga custom terkunci
+          </span>
+          <button
+            onClick={clearDiscount}
+            className="text-[10px] font-bold bg-red-500 hover:bg-red-600 text-white rounded-full px-3 py-1 active:scale-95 transition-transform"
+          >
+            HAPUS
+          </button>
+        </div>
+      )}
+      {/* Dialog panduan: tap box harga terkunci -> konfirmasi hapus diskon */}
+      <DiscountUnlockDialog
+        open={unlockTarget !== null}
+        onOpenChange={(o) => { if (!o) setUnlockTarget(null); }}
+        itemName={unlockTarget?.name ?? null}
+        discountPercent={discountPercent}
+        onConfirm={confirmUnlockDiscount}
+      />
       <div className="flex-1 overflow-y-auto px-4 pb-32">
         {cart.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center text-gray-500">
@@ -334,9 +372,15 @@ const CartScreen = () => {
                     <input
                       type="text"
                       inputMode="numeric"
-                      disabled={isDiscountActive}
-                      title={isDiscountActive ? 'Harga terkunci saat diskon aktif - hapus diskon dulu untuk mengubah' : undefined}
+                      readOnly={isDiscountActive}
                       value={editingPrices[item.id] !== undefined ? editingPrices[item.id] : item.price.toLocaleString('id-ID')}
+                      onClick={isDiscountActive ? () => setUnlockTarget(item) : undefined}
+                      ref={el => {
+                        if (el && focusItemId === item.id) {
+                          el.focus();
+                          setFocusItemId(null);
+                        }
+                      }}
                       onChange={e => {
                         const val = e.target.value.replace(/\D/g, '');
                         setEditingPrices(prev => ({ ...prev, [item.id]: val }));
@@ -354,8 +398,8 @@ const CartScreen = () => {
                           return next;
                         });
                       }}
-                      className={`w-20 px-1.5 py-1 text-right text-xs font-medium focus:outline-none ${isDiscountActive ? 'text-red-600 bg-red-50 cursor-not-allowed' : 'focus:ring-1 focus:ring-amber-400'}`}
-                      aria-label="Ubah harga"
+                      className={`w-20 px-1.5 py-1 text-right text-xs font-medium focus:outline-none ${isDiscountActive ? 'text-red-600 bg-red-50 cursor-pointer' : 'focus:ring-1 focus:ring-amber-400'}`}
+                      aria-label={isDiscountActive ? 'Harga terkunci diskon — tap untuk hapus diskon dan edit harga' : 'Ubah harga'}
                     />
                   </div>
                   <span className="text-[10px] text-gray-400 mx-1">x</span>
@@ -414,7 +458,7 @@ const CartScreen = () => {
 
             {/* Discount Section - mengontrol box custom harga tiap barang */}
             {cart.length > 0 && (
-              <div className={`mt-4 p-4 rounded-xl border transition-colors ${isDiscountActive ? 'bg-red-50 border-red-200' : 'bg-gradient-to-r from-purple-50 to-indigo-50 border-purple-200'}`}>
+              <div className={`mt-4 p-4 rounded-xl border-2 shadow-sm transition-colors ${isDiscountActive ? 'bg-red-50 border-red-400' : 'bg-gradient-to-r from-purple-50 to-indigo-50 border-purple-400'}`}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <span className="text-lg">🏷️</span>
@@ -494,7 +538,7 @@ const CartScreen = () => {
                   {isDiscountActive && (
                     <button
                       onClick={clearDiscount}
-                      className="px-3 py-1.5 text-xs font-bold rounded-lg bg-gray-200 text-gray-600 hover:bg-gray-300 transition-all"
+                      className="px-3 py-1.5 text-xs font-bold rounded-lg bg-red-500 text-white hover:bg-red-600 transition-all"
                     >
                       ✕ Hapus
                     </button>
