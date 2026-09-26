@@ -18,6 +18,8 @@ import {
   Check,
   X,
   Bell,
+  Banknote,
+  Receipt,
   ChevronDown,
   Wifi,
   WifiOff,
@@ -32,6 +34,21 @@ import { Label } from "@/components/ui/label";
 import { useNavigate } from "react-router-dom";
 
 import { formatCurrency, getFromLS, getRelativeDateBadge, getRelativeDateBadgeClass, LS_KEYS, getStoreName, getConfig, saveToLS } from "@/lib/utils";
+
+// Tanggal (YYYY-MM-DD) dengan offset hari ke belakang — untuk tab "Hari Ini / 3 Hari Terakhir" ala Z-POS
+const noteDayStr = (offset: number): string => {
+  const d = new Date();
+  d.setDate(d.getDate() - offset);
+  return d.toISOString().split('T')[0];
+};
+
+// Kelas warna + label + ikon kategori catatan (ala Z-POS cashierHome.css)
+const noteCategoryUI = (type: Note['type']): { className: string; label: string; icon: React.ReactNode } => {
+  if (type === 'transfer') return { className: 'note-category-transfer', label: 'Transfer', icon: <Banknote size={15} /> };
+  if (type === 'pengeluaran') return { className: 'note-category-expense', label: 'Pengeluaran', icon: <Receipt size={15} /> };
+  if (type === 'belanja') return { className: 'note-category-expense', label: 'Belanja', icon: <Receipt size={15} /> };
+  return { className: 'note-category-reminder', label: 'Pengingat', icon: <Bell size={15} /> };
+};
 import { getProducts as getCachedProducts } from "@/lib/productCache";
 import { safeGetAllTransactions, safeInitAndMigrate, getAllTransactions } from "@/lib/indexedDB";
 import { getDailyStatsInRange, addVisitor, addVisitorLost, getVisitorStatsByDate, getLostDescriptionsByDate, removeLastVisitor, removeLastLost, getLostEntriesByDate, removeLostByTimestamp, updateLostDescription, VisitorLostLog, getVisitorStatsByTime, addVisitorBefore12, addVisitorAfter12, removeVisitorBefore12, removeVisitorAfter12 } from "@/lib/visitors";
@@ -111,8 +128,9 @@ const Dashboard = () => {
   const [newNoteType, setNewNoteType] = useState<Note['type']>("pengingat");
   const [newNoteCustomerName, setNewNoteCustomerName] = useState("");
   const [newNoteAmount, setNewNoteAmount] = useState("");
-  const [confirmCompleteNoteId, setConfirmCompleteNoteId] = useState<string | null>(null);
   const [confirmDeleteNoteId, setConfirmDeleteNoteId] = useState<string | null>(null);
+  // Tab gaya Z-POS: "Hari Ini" vs "3 Hari Terakhir"
+  const [noteTab, setNoteTab] = useState<'today' | 'recent'>('today');
   const [editNoteId, setEditNoteId] = useState<string | null>(null);
   const [showCompletedNotes, setShowCompletedNotes] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -377,10 +395,39 @@ const Dashboard = () => {
     setAddNoteDialogOpen(true);
   };
 
+  // ═══ Daftar catatan gaya Z-POS: tab "Hari Ini" / "3 Hari Terakhir" ═══
+  const notesTodayList = notesList.filter(n => n.type !== 'hutang' && n.date.split('T')[0] === noteDayStr(0));
+  const notesRecentList = notesList.filter(n => {
+    if (n.type === 'hutang') return false;
+    const d = n.date.split('T')[0];
+    return d >= noteDayStr(2) && d <= noteDayStr(0);
+  });
+  const visibleNotesList = noteTab === 'today' ? notesTodayList : notesRecentList;
+
+  // Buka form tambah dari chip kategori (ala Z-POS)
+  const startAddNote = (type: Note['type']) => {
+    setNewNoteType(type);
+    setAddNoteDialogOpen(true);
+    setNotesDialogOpen(false);
+  };
+
+  // Salinan teks form per kategori (ala Z-POS DailyNotesDialog)
+  const noteFormCopy = (() => {
+    switch (newNoteType) {
+      case 'transfer':
+        return { label: 'Transfer', description: 'Nominal wajib, keterangan opsional.', amountLabel: 'Nominal Transfer', contentLabel: 'Keterangan (Opsional)', placeholder: 'CONTOH: TRANSFER DARI PELANGGAN' };
+      case 'pengeluaran':
+        return { label: 'Pengeluaran', description: 'Catat pengeluaran operasional hari ini.', amountLabel: 'Total Pengeluaran', contentLabel: 'Keterangan Pengeluaran', placeholder: 'CONTOH: BAYAR PAKET COD' };
+      case 'belanja':
+        return { label: 'Belanja', description: 'Catat belanja harian.', amountLabel: 'Total Belanja', contentLabel: 'Catatan', placeholder: 'Isi catatan...' };
+      default:
+        return { label: 'Pengingat', description: 'Tulis hal yang perlu diingat hari ini.', amountLabel: 'Nominal', contentLabel: 'Apa yang perlu diingat?', placeholder: 'CONTOH: HUBUNGI PELANGGAN' };
+    }
+  })();
+
   // Handle complete note
   const handleCompleteNote = (id: string) => {
     completeNote(id);
-    setConfirmCompleteNoteId(null);
     refreshNotes();
     // Keep notes dialog open
     setNotesDialogOpen(true);
@@ -1284,13 +1331,13 @@ const Dashboard = () => {
           salesRows.push(['CATATAN']);
           salesRows.push(['Tgl', 'Jenis', 'Nama', 'Isi Catatan', 'Jumlah', 'Status', 'Tgl Selesai']);
           notesForXlsx.forEach((n: any) => {
-            const status = n.type === 'hutang' ? (n.completed ? 'LUNAS' : 'BELUM BAYAR') : '';
+            const status = n.type === 'hutang' ? (n.completed ? 'LUNAS' : 'BELUM BAYAR') : n.type === 'transfer' ? 'MASUK' : n.type === 'pengeluaran' ? 'KELUAR' : '';
             const tglSelesai = n.completedAt ? (n.date.split('T')[0] === n.completedAt.split('T')[0] ? 'HARI INI' : new Date(n.completedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '')) : (n.type === 'hutang' ? '-' : '');
             salesRows.push([
               new Date(n.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, ''),
               n.type.toUpperCase(),
               n.customerName || '-',
-              n.content,
+              n.content || '-',
               n.amount || 0,
               status,
               tglSelesai
@@ -2233,16 +2280,18 @@ const Dashboard = () => {
           </Card>
         </div>
 
-        {/* Notes List Dialog */}
+        {/* Notes List Dialog — tampilan persis Z-POS (DailyNotesDialog) */}
         <Dialog open={notesDialogOpen} onOpenChange={setNotesDialogOpen}>
-          <DialogContent className="top-[5%] translate-y-0 max-w-md max-h-[85vh] overflow-hidden flex flex-col">
-            <DialogHeader>
-              <div className="flex items-center justify-between">
-                <DialogTitle className="flex items-center gap-2">
-                  <StickyNote className="h-5 w-5 text-purple-600" />
-                  Catatan & Belanja
-                </DialogTitle>
-                {notesList.filter(n => n.type !== 'hutang').length > 0 && (
+          <DialogContent className="zpos-dialog top-[5%] translate-y-0 max-w-md max-h-[85vh] overflow-hidden flex flex-col">
+            <DialogTitle className="sr-only">Catatan Hari Ini</DialogTitle>
+            <header className="modal-heading modal-heading-note">
+              <StickyNote size={23} className="icon" />
+              <div className="min-w-0">
+                <h2>Catatan Hari Ini</h2>
+                <p>{notesTodayList.length === 0 ? 'Belum ada catatan hari ini' : `${notesTodayList.length} catatan hari ini`}</p>
+              </div>
+              {notesList.filter(n => n.type !== 'hutang').length > 0 && (
+                <div className="modal-heading-extra">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -2256,203 +2305,87 @@ const Dashboard = () => {
                   >
                     <Trash2 className="h-3 w-3 mr-1" /> HAPUS SEMUA
                   </Button>
-                )}
-              </div>
-              <DialogDescription>
-                {notesList.filter(n => n.type !== 'hutang' && !n.completed).length > 0
-                  ? `${notesList.filter(n => n.type !== 'hutang' && !n.completed).length} catatan aktif`
-                  : 'Tidak ada catatan aktif'}
-              </DialogDescription>
-            </DialogHeader>
+                </div>
+              )}
+            </header>
 
-            <div className="flex-1 overflow-y-auto space-y-2 max-h-[50vh] pr-1">
-              {/* Filter tabs */}
-              <div className="flex gap-2 sticky top-0 bg-white z-10 pb-2">
-                <Button
-                  variant={!showCompletedNotes ? "default" : "outline"}
-                  size="sm"
-                  className={`text-xs flex-1 ${!showCompletedNotes ? 'bg-purple-600 hover:bg-purple-700' : ''}`}
-                  onClick={() => setShowCompletedNotes(false)}
-                >
-                  Aktif ({notesList.filter(n => n.type !== 'hutang' && !n.completed).length})
-                </Button>
-                <Button
-                  variant={showCompletedNotes ? "default" : "outline"}
-                  size="sm"
-                  className={`text-xs flex-1 ${showCompletedNotes ? 'bg-gray-600 hover:bg-gray-700' : ''}`}
-                  onClick={() => setShowCompletedNotes(true)}
-                >
-                  Selesai ({notesList.filter(n => n.type !== 'hutang' && n.completed).length})
-                </Button>
-              </div>
+            <div className="modal-tabs" role="tablist" aria-label="Periode catatan">
+              <button type="button" role="tab" aria-selected={noteTab === 'today'} className={noteTab === 'today' ? 'modal-tab modal-tab-active' : 'modal-tab'} onClick={() => setNoteTab('today')}>
+                Hari Ini ({notesTodayList.length})
+              </button>
+              <button type="button" role="tab" aria-selected={noteTab === 'recent'} className={noteTab === 'recent' ? 'modal-tab modal-tab-active' : 'modal-tab'} onClick={() => setNoteTab('recent')}>
+                3 Hari Terakhir ({notesRecentList.length})
+              </button>
+            </div>
 
-              {/* Notes list - exclude hutang type */}
-              {notesList
-                .filter(n => n.type !== 'hutang') // Exclude hutang - shown in separate Hutang dialog
-                .filter(n => showCompletedNotes ? n.completed : !n.completed)
-                .map(note => (
-                  <div
-                    key={note.id}
-                    className={`p-2 rounded-lg border transition-all ${note.completed
-                      ? 'bg-gray-50 border-gray-200 opacity-60'
-                      : note.type === 'hutang'
-                        ? 'bg-red-50 border-red-200 shadow-sm'
-                        : note.type === 'belanja'
-                          ? 'bg-green-50 border-green-200 shadow-sm'
-                          : note.type === 'transfer'
-                            ? 'bg-indigo-50 border-indigo-200 shadow-sm'
-                            : note.type === 'pengeluaran'
-                              ? 'bg-orange-50 border-orange-200 shadow-sm'
-                              : 'bg-blue-50 border-blue-200 shadow-sm'
-                      }`}
-                  >
-                    {/* 1. Header Row (Labels Left, Actions Right) */}
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${note.type === 'hutang'
-                          ? 'bg-red-200 text-red-800'
-                          : note.type === 'belanja'
-                            ? 'bg-green-200 text-green-800'
-                            : note.type === 'transfer'
-                              ? 'bg-indigo-200 text-indigo-800'
-                              : note.type === 'pengeluaran'
-                                ? 'bg-orange-200 text-orange-800'
-                                : 'bg-blue-200 text-blue-800'
-                          }`}>
-                          {note.type === 'hutang' ? '💰 Hutang' : note.type === 'belanja' ? '🛒 Belanja' : note.type === 'transfer' ? '💸 Transfer' : note.type === 'pengeluaran' ? '🧾 Pengeluaran' : '📝 Catatan'}
-                        </span>
-
-                        {note.completed && (
-                          <span className="text-[8px] px-1.5 py-0.5 rounded bg-green-200 text-green-800 font-bold uppercase whitespace-nowrap">
-                            ✓ Selesai
-                          </span>
-                        )}
-
-                        <div className="flex items-center gap-1 opacity-70">
-                          <Calendar className="h-2.5 w-2.5 text-blue-500" />
-                          <span className="text-[8px] text-blue-600 font-bold whitespace-nowrap">
-                            {new Date(note.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                          </span>
+            <div className="notes-content">
+              {visibleNotesList.length === 0 ? (
+                <div className="modal-empty-state">
+                  <StickyNote size={52} strokeWidth={1.6} className="mx-auto" />
+                  <p>{noteTab === 'today' ? 'Belum ada catatan hari ini' : 'Belum ada catatan tiga hari terakhir'}</p>
+                </div>
+              ) : (
+                <div className="note-list">
+                  {visibleNotesList.map(note => {
+                    const cat = noteCategoryUI(note.type);
+                    const badge = getRelativeDateBadge(note.date);
+                    return (
+                      <article key={note.id} className={`note-item ${cat.className} ${note.completed ? 'is-done' : ''}`}>
+                        <div className="note-item-meta">
+                          <span>{cat.icon}{cat.label} • {new Date(note.date).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</span>
+                          {noteTab === 'recent' && (
+                            <span className="note-item-date">
+                              <time dateTime={note.date}>
+                                {new Date(note.date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}
+                              </time>
+                              {badge && badge !== 'Hari ini' && (
+                                <span className="text-[9px] font-bold text-slate-500">{badge}</span>
+                              )}
+                            </span>
+                          )}
                         </div>
-                      </div>
-
-                      {/* Actions Group (Horizontal) */}
-                      <div className="flex items-center gap-1 shrink-0">
-
-                        {!note.completed && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-6 w-6 p-0 bg-blue-50 border-blue-200 text-blue-500 hover:bg-blue-50"
-                            onClick={() => handleStartEditNote(note)}
-                          >
-                            <Pencil className="h-2.5 w-2.5" />
-                          </Button>
-                        )}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 w-6 p-0 bg-red-50 border-red-200 text-red-500 hover:bg-red-50"
-                          onClick={() => setConfirmDeleteNoteId(note.id)}
-                        >
-                          <Trash2 className="h-2.5 w-2.5" />
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* 2. Content Section (Vertical flow) */}
-                    <div className="flex-1 min-w-0">
-                      {/* Name & Amount Row */}
-                      <div className="flex items-center gap-2 mb-1">
-                        <div className="text-[13px] font-black text-gray-800 leading-none uppercase tracking-tight shrink-0">
-                          {note.type === 'hutang' ? (note.customerName || 'Tanpa Nama') : note.content}
+                        {note.amount ? <strong>{formatCurrency(note.amount)}</strong> : null}
+                        {note.content ? <p className={note.completed ? 'line-through' : ''}>{note.content}</p> : null}
+                        {note.completed ? <small>✓ Selesai</small> : null}
+                        <div className="note-entry-actions">
+                          {!note.completed && (
+                            <button type="button" onClick={() => handleStartEditNote(note)}>
+                              <Pencil size={14} /> Edit
+                            </button>
+                          )}
+                          {!note.completed && (
+                            <button type="button" className="is-success" onClick={() => handleCompleteNote(note.id)}>
+                              <Check size={14} /> Selesai
+                            </button>
+                          )}
+                          <button type="button" onClick={() => setConfirmDeleteNoteId(note.id)}>
+                            <Trash2 size={14} /> Hapus
+                          </button>
                         </div>
-
-                        <div className="flex-1 h-[1px] bg-gray-200/50" />
-
-                        {(note.type === 'hutang' || note.type === 'belanja' || note.type === 'transfer' || note.type === 'pengeluaran') && note.amount && (
-                          <div className={`text-[13px] font-black ${note.type === 'hutang'
-                            ? 'text-red-600 bg-red-100/80 border-red-200/50'
-                            : note.type === 'belanja'
-                              ? 'text-green-600 bg-green-100/80 border-green-200/50'
-                              : note.type === 'transfer'
-                                ? 'text-indigo-600 bg-indigo-100/80 border-indigo-200/50'
-                                : 'text-orange-600 bg-orange-100/80 border-orange-200/50'} px-2 py-0.5 rounded border shadow-sm leading-none shrink-0`}>
-                            {formatCurrency(note.amount)}
+                        {confirmDeleteNoteId === note.id && (
+                          <div className="note-cancel-confirm">
+                            <span>Hapus catatan ini?</span>
+                            <button type="button" onClick={() => setConfirmDeleteNoteId(null)}>Tidak</button>
+                            <button type="button" className="is-danger" onClick={() => { handleDeleteNote(note.id); setConfirmDeleteNoteId(null); }}>Ya</button>
                           </div>
                         )}
-
-                        <div className="flex-1 h-[1px] bg-gray-200/50" />
-                      </div>
-
-                      {/* Description Area (Adaptive Height) */}
-                      <div className={`text-[11px] leading-snug whitespace-pre-wrap ${note.type === 'hutang' ? 'text-gray-600' : 'text-gray-500'} ${note.completed ? 'line-through' : ''}`}>
-                        {note.type === 'hutang' ? (
-                          note.content
-                        ) : (
-                          note.type === 'belanja'
-                            ? 'Kebutuhan belanja harian'
-                            : note.type === 'transfer'
-                              ? 'Uang masuk via transfer'
-                              : note.type === 'pengeluaran'
-                                ? 'Pengeluaran operasional'
-                                : 'Catatan pribadi'
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-              {notesList.filter(n => showCompletedNotes ? n.completed : !n.completed).length === 0 && (
-                <div className="text-center py-6 text-muted-foreground">
-                  <StickyNote className="h-10 w-10 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">{showCompletedNotes ? 'Belum ada catatan yang selesai' : 'Belum ada catatan aktif'}</p>
+                      </article>
+                    );
+                  })}
                 </div>
               )}
             </div>
 
-            <div className="border-t pt-3 mt-2 flex flex-col gap-2">
-              <div className="text-[11px] font-bold text-gray-400 flex items-center gap-1.5 uppercase tracking-wider">
-                <Plus className="h-3 w-3" /> Tambah Catatan Baru :
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-[10px] h-9 bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 font-bold"
-                  onClick={() => {
-                    setNewNoteType('pengingat');
-                    setAddNoteDialogOpen(true);
-                    setNotesDialogOpen(false);
-                  }}
-                >
-                  🔔 PENGINGAT
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-[10px] h-9 bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 font-bold"
-                  onClick={() => {
-                    setNewNoteType('transfer');
-                    setAddNoteDialogOpen(true);
-                    setNotesDialogOpen(false);
-                  }}
-                >
-                  💸 TRANSFER
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-[10px] h-9 bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 font-bold"
-                  onClick={() => {
-                    setNewNoteType('pengeluaran');
-                    setAddNoteDialogOpen(true);
-                    setNotesDialogOpen(false);
-                  }}
-                >
-                  🧾 PENGELUARAN
-                </Button>
-              </div>
+            <div className="note-categories">
+              <button type="button" className="note-category-reminder" onClick={() => startAddNote('pengingat')}>
+                <Bell size={17} /> Pengingat
+              </button>
+              <button type="button" className="note-category-transfer" onClick={() => startAddNote('transfer')}>
+                <Banknote size={17} /> Transfer
+              </button>
+              <button type="button" className="note-category-expense" onClick={() => startAddNote('pengeluaran')}>
+                <Receipt size={17} /> Pengeluaran
+              </button>
             </div>
           </DialogContent>
         </Dialog>
@@ -2609,7 +2542,7 @@ const Dashboard = () => {
           </DialogContent>
         </Dialog>
 
-        {/* Add/Edit Note Dialog */}
+        {/* Add/Edit Note Dialog — form gaya Z-POS */}
         <Dialog open={addNoteDialogOpen} onOpenChange={(open) => {
           if (!open) {
             setAddNoteDialogOpen(false);
@@ -2622,152 +2555,69 @@ const Dashboard = () => {
             setNotesDialogOpen(true);
           }
         }}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader>
-              <DialogTitle>{editNoteId ? 'Edit Catatan' : 'Tambah Catatan'}</DialogTitle>
-              <DialogDescription>{editNoteId ? 'Ubah catatan yang sudah ada' : 'Buat catatan pengingat baru'}</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              {/* Type Select */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Jenis Catatan</label>
-                <Select value={newNoteType} onValueChange={(v) => setNewNoteType(v as Note['type'])}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Pilih jenis" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pengingat">🔔 Pengingat</SelectItem>
-                    <SelectItem value="transfer">💸 Transfer Masuk</SelectItem>
-                    <SelectItem value="pengeluaran">🧾 Pengeluaran</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Amount (belanja/transfer/pengeluaran) - aturan Z-POS: transfer wajib nominal, pengeluaran wajib nominal */}
+          <DialogContent className="zpos-dialog top-[4%] translate-y-0 max-w-sm max-h-[80vh] overflow-y-auto">
+            <DialogTitle className="sr-only">{editNoteId ? 'Edit Catatan' : 'Tambah Catatan'}</DialogTitle>
+            <form
+              className={`note-detail-form ${newNoteType === 'transfer' ? 'note-category-transfer' : (newNoteType === 'pengeluaran' || newNoteType === 'belanja') ? 'note-category-expense' : 'note-category-reminder'}`}
+              onSubmit={(e) => { e.preventDefault(); handleSaveNote(); }}
+            >
+              <h2 className="note-form-title">{editNoteId ? 'Edit' : 'Tambah'} {noteFormCopy.label}</h2>
+              <p className="note-form-description">{noteFormCopy.description}</p>
               {(newNoteType === 'belanja' || newNoteType === 'transfer' || newNoteType === 'pengeluaran') && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">
-                    {newNoteType === 'belanja' ? 'Total Belanja' : newNoteType === 'transfer' ? 'Nominal Transfer' : 'Total Pengeluaran'}
-                    {(newNoteType === 'transfer' || newNoteType === 'pengeluaran') && <span className="text-red-500"> *</span>}
-                  </label>
-                  <div className="flex items-center border rounded-md overflow-hidden focus-within:ring-2 focus-within:ring-purple-500">
-                    <span className="px-3 py-2 bg-gray-100 border-r text-sm text-gray-600 font-medium">Rp</span>
+                <label className="note-form-field">
+                  <span>{noteFormCopy.amountLabel}{newNoteType !== 'belanja' ? ' *' : ''}</span>
+                  <div className="note-form-money">
+                    <span>Rp</span>
                     <input
                       type="text"
                       inputMode="numeric"
                       value={newNoteAmount}
                       onChange={(e) => {
-                        // Remove non-digits, then format with thousand separator
                         const cleanValue = e.target.value.replace(/\D/g, '');
-                        const formatted = cleanValue ? parseInt(cleanValue).toLocaleString('id-ID') : '';
-                        setNewNoteAmount(formatted);
+                        setNewNoteAmount(cleanValue ? parseInt(cleanValue).toLocaleString('id-ID') : '');
                       }}
                       placeholder="50.000"
-                      className="flex-1 px-3 py-2 text-sm focus:outline-none"
                     />
                   </div>
-                </div>
-              )}
-
-              {/* Content - opsional untuk transfer (ala Z-POS), wajib untuk lainnya */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">
-                  {newNoteType === 'transfer' ? 'Keterangan (Opsional)' : newNoteType === 'pengeluaran' ? 'Keterangan Pengeluaran' : 'Catatan'}
                 </label>
-                <Textarea
+              )}
+              <label className="note-form-field">
+                <span>{noteFormCopy.contentLabel}</span>
+                <textarea
+                  maxLength={240}
                   value={newNoteContent}
                   onChange={(e) => setNewNoteContent(e.target.value)}
-                  placeholder={newNoteType === 'transfer'
-                    ? 'CONTOH: TRANSFER DARI PELANGGAN'
-                    : newNoteType === 'pengeluaran'
-                      ? 'CONTOH: BAYAR PAKET COD'
-                      : 'Isi catatan...'}
-                  rows={3}
+                  placeholder={noteFormCopy.placeholder}
+                  rows={4}
                 />
+              </label>
+              <div className="note-form-actions">
+                <button
+                  type="submit"
+                  disabled={(newNoteType !== 'transfer' && !newNoteContent.trim()) || ((newNoteType === 'transfer' || newNoteType === 'pengeluaran') && !(newNoteAmount && parseInt(newNoteAmount.replace(/\./g, '')) > 0))}
+                >
+                  {editNoteId ? 'Simpan Perubahan' : `Simpan ${noteFormCopy.label}`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddNoteDialogOpen(false);
+                    setEditNoteId(null);
+                    setNewNoteContent("");
+                    setNewNoteCustomerName("");
+                    setNewNoteAmount("");
+                    setNewNoteType("pengingat");
+                    // Reopen notes list dialog
+                    setNotesDialogOpen(true);
+                  }}
+                >
+                  Batal
+                </button>
               </div>
-            </div>
-            <DialogFooter className="gap-2">
-              <Button variant="outline" onClick={() => {
-                setAddNoteDialogOpen(false);
-                setEditNoteId(null);
-                setNewNoteContent("");
-                setNewNoteCustomerName("");
-                setNewNoteAmount("");
-                setNewNoteType("hutang");
-                // Reopen notes list dialog
-                setNotesDialogOpen(true);
-              }}>
-                Batal
-              </Button>
-              <Button
-                className="bg-purple-600 hover:bg-purple-700"
-                onClick={handleSaveNote}
-                disabled={(newNoteType !== 'transfer' && !newNoteContent.trim()) || ((newNoteType === 'transfer' || newNoteType === 'pengeluaran') && !(newNoteAmount && parseInt(newNoteAmount.replace(/\./g, '')) > 0))}
-              >
-                {editNoteId ? 'Simpan Perubahan' : 'Simpan'}
-              </Button>
-            </DialogFooter>
+            </form>
           </DialogContent>
         </Dialog>
 
-        {/* Confirm Complete Note Dialog */}
-        <Dialog open={!!confirmCompleteNoteId} onOpenChange={(open) => !open && setConfirmCompleteNoteId(null)}>
-          <DialogContent className="max-w-xs">
-            <DialogHeader>
-              <DialogTitle className="text-center">Selesaikan Catatan?</DialogTitle>
-              <DialogDescription className="text-center">
-                Catatan akan ditandai sebagai selesai dan dipindahkan ke tab "Selesai"
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex gap-2 justify-center">
-              <Button
-                variant="outline"
-                onClick={() => setConfirmCompleteNoteId(null)}
-              >
-                Batal
-              </Button>
-              <Button
-                className="bg-green-600 hover:bg-green-700"
-                onClick={() => confirmCompleteNoteId && handleCompleteNote(confirmCompleteNoteId)}
-              >
-                <Check className="h-4 w-4 mr-1" />
-                Ya, Selesai
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        {/* Confirm Delete Note Dialog */}
-        <Dialog open={!!confirmDeleteNoteId} onOpenChange={(open) => !open && setConfirmDeleteNoteId(null)}>
-          <DialogContent className="max-w-xs">
-            <DialogHeader>
-              <DialogTitle className="text-center">Hapus Catatan?</DialogTitle>
-              <DialogDescription className="text-center">
-                Catatan akan dihapus permanen dan tidak bisa dikembalikan
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex gap-2 justify-center">
-              <Button
-                variant="outline"
-                onClick={() => setConfirmDeleteNoteId(null)}
-              >
-                Batal
-              </Button>
-              <Button
-                className="bg-red-600 hover:bg-red-700"
-                onClick={() => {
-                  if (confirmDeleteNoteId) {
-                    handleDeleteNote(confirmDeleteNoteId);
-                    setConfirmDeleteNoteId(null);
-                  }
-                }}
-              >
-                <Trash2 className="h-4 w-4 mr-1" />
-                Ya, Hapus
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
         {/* Confirm Complete Hutang Dialog */}
         <Dialog open={!!confirmCompleteHutangId} onOpenChange={(open) => !open && setConfirmCompleteHutangId(null)}>
           <DialogContent className="max-w-xs">
